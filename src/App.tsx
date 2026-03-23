@@ -1145,22 +1145,11 @@ const exportTournament = () => {
   const handleLogin = async () => {
     setLoginError(null);
 
-    // Falls kein Backend konfiguriert ist, nur lokaler Operator-Schalter
-    if (!BACKEND_BASE) {
-      if (loginInput.trim().length === 0) {
-        setLoginError("Bitte Passwort eingeben");
-        return;
-      }
-      setIsOperator(true);
-      setLoginInput("");
-      return;
-    }
-
     try {
       const res = await fetch(`${BACKEND_BASE}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: loginInput }),
+        body: JSON.stringify({ password: loginInput, tournamentId }),
       });
 
       if (!res.ok) {
@@ -1319,6 +1308,23 @@ const exportTournament = () => {
         const data = await listRes.json();
         setTournamentSlots(data?.slots ?? []);
       }
+
+      // Lokale Browser-Daten für diesen Slot löschen
+      if (typeof window !== "undefined") {
+        try {
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key) continue;
+            if (key.startsWith(`${id}:`)) {
+              keysToRemove.push(key);
+            }
+          }
+          keysToRemove.forEach((k) => localStorage.removeItem(k));
+        } catch (e) {
+          console.warn("Konnte lokale Turnierdaten nicht löschen", e);
+        }
+      }
     } catch (e) {
       console.warn("Konnte Turnier nicht löschen", e);
       setSlotsError("Turnier konnte nicht gelöscht werden");
@@ -1341,8 +1347,8 @@ const exportTournament = () => {
       >
         <h2 style={{ marginTop: 0 }}>Turnier auswählen</h2>
         <p style={{ fontSize: 14, opacity: 0.8 }}>
-          Wähle ein bestehendes Turnier oder lege ein neues an. Zum Löschen oder Anlegen
-          ist das Master-Passwort erforderlich.
+          Wähle ein bestehendes Turnier oder lege ein neues an. Zum Löschen genügt das
+          Turnier-Passwort oder alternativ das Master-Passwort.
         </p>
 
         <div style={{ marginTop: 16 }}>

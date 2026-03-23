@@ -204,6 +204,16 @@ app.post("/tournaments", (req, res) => {
 
   writeTournamentsMeta(meta);
 
+   // Vorsichtshalber alten State dieses Slots löschen, damit das Turnier sauber startet
+  try {
+    const stateFile = getStateFile(freeId);
+    if (fs.existsSync(stateFile)) {
+      fs.unlinkSync(stateFile);
+    }
+  } catch (e) {
+    console.error("Failed to delete previous state file for", freeId, e);
+  }
+
   res.json({
     ok: true,
     slot: {
