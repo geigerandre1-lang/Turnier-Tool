@@ -544,8 +544,6 @@ export default function App() {
 
   // Turnier-Slots vom Backend laden (für Root-Auswahlbildschirm)
   useEffect(() => {
-    if (!BACKEND_BASE) return;
-
     const loadSlots = async () => {
       setSlotsLoading(true);
       setSlotsError(null);
@@ -1263,7 +1261,6 @@ const exportTournament = () => {
   );
 
   const handleCreateTournament = async () => {
-    if (!BACKEND_BASE) return;
     setSlotsError(null);
     if (!newTournamentName.trim() || !newOperatorPassword.trim() || !masterPassword.trim()) {
       setSlotsError("Bitte Name, Turnier-Passwort und Master-Passwort ausfüllen");
@@ -1302,7 +1299,6 @@ const exportTournament = () => {
   };
 
   const handleDeleteTournament = async (id: string) => {
-    if (!BACKEND_BASE) return;
     if (!masterPassword.trim()) {
       setSlotsError("Zum Löschen bitte das Master-Passwort eingeben");
       return;
