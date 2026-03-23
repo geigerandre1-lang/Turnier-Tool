@@ -432,7 +432,6 @@ export default function App() {
   useEffect(() => {
     if (!TOURNAMENT_ID) return; // Root-URL: nichts speichern
     if (!isOperator) return;
-    if (!BACKEND_BASE) return;
 
     const payload = {
       players,
