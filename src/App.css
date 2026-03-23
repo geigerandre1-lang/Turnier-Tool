@@ -1,0 +1,94 @@
+.App {
+  text-align: center;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.beamer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* Turnier + Automaten nebeneinander */
+  gap: 1rem;
+}
+
+/* Blinkanimation für abgelaufene Timer im Bracket */
+@keyframes bracket-timer-blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.2; }
+  100% { opacity: 1; }
+}
+
+.bracket-timer-expired {
+  animation: bracket-timer-blink 1s infinite;
+}
+
+/* Drucklayout für PrintView */
+@media print {
+  body {
+    margin: 0;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .print-root {
+    padding: 0.5rem;
+  }
+
+  .print-no-print {
+    display: none !important;
+  }
+
+  .print-bracket-wrapper {
+    max-height: none !important;
+    overflow: visible !important;
+    page-break-inside: avoid;
+  }
+
+  .print-grid {
+    gap: 0.5rem;
+  }
+
+  /* Bracket im Druck: keine Scrollcontainer, komplette Höhe ausgeben */
+  .bracket-scroll-container {
+    min-height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .bracket-inner {
+    height: auto !important;
+  }
+}

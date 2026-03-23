@@ -1,0 +1,274 @@
+{
+  "players": [
+    {
+      "id": "1773836803376",
+      "name": "Mimi"
+    },
+    {
+      "id": "1773836805326",
+      "name": "Andre"
+    },
+    {
+      "id": "1773862405430",
+      "name": "Test"
+    },
+    {
+      "id": "1773862408146",
+      "name": "Peter"
+    }
+  ],
+  "matches": {
+    "w0-0": {
+      "id": "w0-0",
+      "round": 0,
+      "player1": "Mimi",
+      "player2": "BYE",
+      "winner": "Mimi",
+      "isLoser": false,
+      "winnerTo": {
+        "matchId": "w1-0",
+        "slot": 1
+      },
+      "loserTo": {
+        "matchId": "l0-0",
+        "slot": 1
+      }
+    },
+    "w0-1": {
+      "id": "w0-1",
+      "round": 0,
+      "player1": "Andre",
+      "player2": "Peter",
+      "winner": null,
+      "isLoser": false,
+      "winnerTo": {
+        "matchId": "w1-0",
+        "slot": 2
+      },
+      "loserTo": {
+        "matchId": "l0-0",
+        "slot": 2
+      },
+      "isOnAutomat": true,
+      "automatNumber": 1,
+      "automatName": "Automat 1",
+      "isNextInAutomatQueue": false
+    },
+    "w1-0": {
+      "id": "w1-0",
+      "round": 1,
+      "player1": "Mimi",
+      "player2": null,
+      "winner": null,
+      "isLoser": false,
+      "player1From": {
+        "matchId": "w0-0"
+      },
+      "player2From": {
+        "matchId": "w0-1"
+      },
+      "loserTo": {
+        "matchId": "l1-0",
+        "slot": 2
+      },
+      "winnerTo": {
+        "matchId": "grandfinal",
+        "slot": 1
+      }
+    },
+    "l0-0": {
+      "id": "l0-0",
+      "round": 0,
+      "player1": "BYE",
+      "player2": null,
+      "winner": null,
+      "isLoser": true,
+      "winnerTo": {
+        "matchId": "l1-0",
+        "slot": 1
+      }
+    },
+    "l1-0": {
+      "id": "l1-0",
+      "round": 1,
+      "player1": null,
+      "player2": null,
+      "player1From": {
+        "matchId": "l0-0"
+      },
+      "player2From": {
+        "matchId": "w1-0"
+      },
+      "winner": null,
+      "isLoser": true,
+      "winnerTo": {
+        "matchId": "grandfinal",
+        "slot": 2
+      }
+    },
+    "grandfinal": {
+      "id": "grandfinal",
+      "round": 2,
+      "player1": null,
+      "player2": null,
+      "winner": null,
+      "isLoser": false,
+      "player1From": {
+        "matchId": "w1-0"
+      },
+      "player2From": {
+        "matchId": "l1-0"
+      }
+    }
+  },
+  "automats": [
+    {
+      "id": 1,
+      "name": "Automat 1",
+      "active": true,
+      "paused": false,
+      "currentMatch": "w0-1"
+    },
+    {
+      "id": 2,
+      "name": "Automat 2",
+      "active": false,
+      "paused": false
+    },
+    {
+      "id": 3,
+      "name": "Automat 3",
+      "active": false,
+      "paused": false
+    },
+    {
+      "id": 4,
+      "name": "Automat 4",
+      "active": false,
+      "paused": false
+    },
+    {
+      "id": 5,
+      "name": "Automat 5",
+      "active": false,
+      "paused": false
+    },
+    {
+      "id": 6,
+      "name": "Automat 6",
+      "active": false,
+      "paused": false
+    },
+    {
+      "id": 7,
+      "name": "Automat 7",
+      "active": false,
+      "paused": false
+    },
+    {
+      "id": 8,
+      "name": "Automat 8",
+      "active": false,
+      "paused": false
+    }
+  ],
+  "maxAutomats": 8,
+  "initialActiveAutomats": 4,
+  "pointScheme": {
+    "win": 3,
+    "loss": 0
+  },
+  "isDoubleKO": true,
+  "isStarted": true,
+  "mode": "ko",
+  "bestOf": 5,
+  "useLegsInKO": true,
+  "groupSize": 4,
+  "preKOState": {
+    "matches": {
+      "G1-R1-M1": {
+        "id": "G1-R1-M1",
+        "player1": "Peter",
+        "player2": "Andre",
+        "winner": "Peter",
+        "round": 0,
+        "group": 0,
+        "isLoser": false,
+        "isOnAutomat": false,
+        "isNextInAutomatQueue": false,
+        "legs1": 3,
+        "legs2": 0
+      },
+      "G1-R1-M2": {
+        "id": "G1-R1-M2",
+        "player1": "Test",
+        "player2": "Mimi",
+        "winner": "Mimi",
+        "round": 0,
+        "group": 0,
+        "isLoser": false,
+        "isNextInAutomatQueue": false,
+        "isOnAutomat": false,
+        "legs1": 1,
+        "legs2": 3
+      },
+      "G1-R2-M3": {
+        "id": "G1-R2-M3",
+        "player1": "Peter",
+        "player2": "Mimi",
+        "winner": "Mimi",
+        "round": 1,
+        "group": 0,
+        "isLoser": false,
+        "isNextInAutomatQueue": false,
+        "isOnAutomat": false,
+        "legs1": 2,
+        "legs2": 3
+      },
+      "G1-R2-M4": {
+        "id": "G1-R2-M4",
+        "player1": "Andre",
+        "player2": "Test",
+        "winner": "Andre",
+        "round": 1,
+        "group": 0,
+        "isLoser": false,
+        "isNextInAutomatQueue": false,
+        "isOnAutomat": false,
+        "legs1": 3,
+        "legs2": 1
+      },
+      "G1-R3-M5": {
+        "id": "G1-R3-M5",
+        "player1": "Peter",
+        "player2": "Test",
+        "winner": "Test",
+        "round": 2,
+        "group": 0,
+        "isLoser": false,
+        "isNextInAutomatQueue": false,
+        "isOnAutomat": false,
+        "legs1": 1,
+        "legs2": 2
+      },
+      "G1-R3-M6": {
+        "id": "G1-R3-M6",
+        "player1": "Mimi",
+        "player2": "Andre",
+        "winner": "Andre",
+        "round": 2,
+        "group": 0,
+        "isLoser": false,
+        "isNextInAutomatQueue": false,
+        "isOnAutomat": false,
+        "legs1": 1,
+        "legs2": 3
+      }
+    },
+    "mode": "groups",
+    "isDoubleKO": false,
+    "useLegsInKO": true
+  },
+  "publicAnnouncement": "khlkjlkjghj",
+  "announcementNotificationId": 1773862615591
+}
