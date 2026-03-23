@@ -178,15 +178,12 @@ app.get("/tournaments", (req, res) => {
   res.json({ slots });
 });
 
-// Neues Turnier anlegen (nur mit Master-Passwort)
+// Neues Turnier anlegen (ohne Auth, Passwort nur für Turnierleitung)
 app.post("/tournaments", (req, res) => {
-  const { name, operatorPassword, masterPassword } = req.body || {};
+  const { name, operatorPassword } = req.body || {};
 
   if (!name || typeof name !== "string" || !operatorPassword) {
     return res.status(400).json({ ok: false, error: "Name and operatorPassword required" });
-  }
-  if (!masterPassword || masterPassword !== MASTER_PASSWORD) {
-    return res.status(401).json({ ok: false, error: "Invalid master password" });
   }
 
   const meta = readTournamentsMeta();
@@ -217,25 +214,37 @@ app.post("/tournaments", (req, res) => {
   });
 });
 
-// Turnier löschen (nur mit Master-Passwort)
+// Turnier löschen (mit Turnier- oder Master-Passwort)
 app.delete("/tournaments/:id", (req, res) => {
-  const { masterPassword } = req.body || {};
+  const { password } = req.body || {};
   const id = req.params.id;
-
-  if (!masterPassword || masterPassword !== MASTER_PASSWORD) {
-    return res.status(401).json({ ok: false, error: "Invalid master password" });
-  }
 
   if (!TOURNAMENT_SLOTS.includes(id)) {
     return res.status(400).json({ ok: false, error: "Unknown tournament slot" });
   }
 
   const meta = readTournamentsMeta();
-  if (meta[id]) {
-    meta[id].name = null;
-    meta[id].operatorPassword = null;
-    writeTournamentsMeta(meta);
+  const slot = meta[id];
+  if (!slot || !slot.name) {
+    return res.status(400).json({ ok: false, error: "Tournament slot is empty" });
   }
+
+  if (!password) {
+    return res.status(401).json({ ok: false, error: "Password required" });
+  }
+
+  const isMaster = password === MASTER_PASSWORD;
+  const isOperator = !!slot.operatorPassword && password === slot.operatorPassword;
+
+  if (!isMaster && !isOperator) {
+    return res.status(401).json({ ok: false, error: "Invalid password" });
+  }
+
+  // Passwort war gültig: Slot leeren
+  slot.name = null;
+  slot.operatorPassword = null;
+  meta[id] = slot;
+  writeTournamentsMeta(meta);
 
   // Zugehörige State-Datei entfernen
   try {

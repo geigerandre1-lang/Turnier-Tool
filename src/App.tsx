@@ -210,7 +210,6 @@ export default function App() {
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [newTournamentName, setNewTournamentName] = useState("");
   const [newOperatorPassword, setNewOperatorPassword] = useState("");
-  const [masterPassword, setMasterPassword] = useState("");
 
   const applyBackendState = (data: any) => {
     if (!data || typeof data !== "object") return;
@@ -1262,8 +1261,8 @@ const exportTournament = () => {
 
   const handleCreateTournament = async () => {
     setSlotsError(null);
-    if (!newTournamentName.trim() || !newOperatorPassword.trim() || !masterPassword.trim()) {
-      setSlotsError("Bitte Name, Turnier-Passwort und Master-Passwort ausfüllen");
+    if (!newTournamentName.trim() || !newOperatorPassword.trim()) {
+      setSlotsError("Bitte Name und Turnier-Passwort ausfüllen");
       return;
     }
 
@@ -1274,7 +1273,6 @@ const exportTournament = () => {
         body: JSON.stringify({
           name: newTournamentName.trim(),
           operatorPassword: newOperatorPassword.trim(),
-          masterPassword: masterPassword.trim(),
         }),
       });
       if (!res.ok) {
@@ -1284,7 +1282,6 @@ const exportTournament = () => {
       }
       setNewTournamentName("");
       setNewOperatorPassword("");
-      // Master-Passwort-Feld bewusst nicht löschen, damit es für mehrere Aktionen genutzt werden kann
 
       // Liste aktualisieren
       const listRes = await fetch(`${BACKEND_BASE}/tournaments`);
@@ -1299,21 +1296,16 @@ const exportTournament = () => {
   };
 
   const handleDeleteTournament = async (id: string) => {
-    if (!masterPassword.trim()) {
-      setSlotsError("Zum Löschen bitte das Master-Passwort eingeben");
-      return;
-    }
-
-    const confirmDelete = window.confirm(
-      `Turnier ${id} wirklich löschen? Alle Spielstände dieses Slots werden entfernt.`
+    const pw = window.prompt(
+      `Turnier ${id} löschen:\nBitte Turnier-Passwort oder Master-Passwort eingeben:`
     );
-    if (!confirmDelete) return;
+    if (!pw) return;
 
     try {
       const res = await fetch(`${BACKEND_BASE}/tournaments/${encodeURIComponent(id)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ masterPassword: masterPassword.trim() }),
+        body: JSON.stringify({ password: pw }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -1440,19 +1432,6 @@ const exportTournament = () => {
             placeholder="Passwort Turnierleitung"
             value={newOperatorPassword}
             onChange={(e) => setNewOperatorPassword(e.target.value)}
-            style={{
-              padding: "0.4rem 0.6rem",
-              borderRadius: 6,
-              border: "1px solid #444",
-              background: "#000",
-              color: "#fff",
-            }}
-          />
-          <input
-            type="password"
-            placeholder="Master-Passwort (für Anlegen/Löschen)"
-            value={masterPassword}
-            onChange={(e) => setMasterPassword(e.target.value)}
             style={{
               padding: "0.4rem 0.6rem",
               borderRadius: 6,
