@@ -217,6 +217,39 @@ app.post("/tournaments", (req, res) => {
   });
 });
 
+// Turnier löschen (nur mit Master-Passwort)
+app.delete("/tournaments/:id", (req, res) => {
+  const { masterPassword } = req.body || {};
+  const id = req.params.id;
+
+  if (!masterPassword || masterPassword !== MASTER_PASSWORD) {
+    return res.status(401).json({ ok: false, error: "Invalid master password" });
+  }
+
+  if (!TOURNAMENT_SLOTS.includes(id)) {
+    return res.status(400).json({ ok: false, error: "Unknown tournament slot" });
+  }
+
+  const meta = readTournamentsMeta();
+  if (meta[id]) {
+    meta[id].name = null;
+    meta[id].operatorPassword = null;
+    writeTournamentsMeta(meta);
+  }
+
+  // Zugehörige State-Datei entfernen
+  try {
+    const stateFile = getStateFile(id);
+    if (fs.existsSync(stateFile)) {
+      fs.unlinkSync(stateFile);
+    }
+  } catch (e) {
+    console.error("Failed to delete state file for", id, e);
+  }
+
+  res.json({ ok: true });
+});
+
 app.get("/state", (req, res) => {
   const tournamentId = req.query.t;
   const state = readState(tournamentId);

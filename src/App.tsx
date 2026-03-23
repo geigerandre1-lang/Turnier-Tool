@@ -27,6 +27,7 @@ const getTournamentId = () => {
   try {
     const url = new URL(window.location.href);
     const segments = url.pathname.split("/").filter(Boolean);
+    // Erstes Segment als Turnier-ID verwenden (z.B. "turnier1" bei /turnier1)
     return segments.length > 0 ? segments[0] : null;
   } catch {
     return null;
@@ -200,6 +201,16 @@ export default function App() {
     const stored = localStorage.getItem("timersEnabled");
     return stored ? JSON.parse(stored) : true;
   });
+
+  // Turnier-Slots für Auswahlbildschirm (Root-URL)
+  const [tournamentSlots, setTournamentSlots] = useState<
+    { id: string; name: string | null; occupied: boolean }[]
+  >([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState<string | null>(null);
+  const [newTournamentName, setNewTournamentName] = useState("");
+  const [newOperatorPassword, setNewOperatorPassword] = useState("");
+  const [masterPassword, setMasterPassword] = useState("");
 
   const applyBackendState = (data: any) => {
     if (!data || typeof data !== "object") return;
@@ -403,6 +414,7 @@ export default function App() {
 
   // Zentralen Turnier-Status vom lokalen Backend laden (falls verfügbar)
   useEffect(() => {
+    if (!TOURNAMENT_ID) return; // Root-URL: kein konkretes Turnier laden
     const loadFromServer = async () => {
       try {
         const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`);
@@ -419,6 +431,7 @@ export default function App() {
 
   // Turnier-Status an Backend senden, wenn sich der Kernzustand ändert
   useEffect(() => {
+    if (!TOURNAMENT_ID) return; // Root-URL: nichts speichern
     if (!isOperator) return;
     if (!BACKEND_BASE) return;
 
@@ -490,6 +503,7 @@ export default function App() {
 
   // Nicht-Operator-Clients: regelmäßig Turnier-Status vom Backend nachladen
   useEffect(() => {
+    if (!TOURNAMENT_ID) return; // Root-URL: kein Polling
     if (isOperator) return;
 
     let cancelled = false;
@@ -527,6 +541,32 @@ export default function App() {
       localStorage.removeItem(storageKey("authToken"));
     }
   }, [authToken]);
+
+  // Turnier-Slots vom Backend laden (für Root-Auswahlbildschirm)
+  useEffect(() => {
+    if (!BACKEND_BASE) return;
+
+    const loadSlots = async () => {
+      setSlotsLoading(true);
+      setSlotsError(null);
+      try {
+        const res = await fetch(`${BACKEND_BASE}/tournaments`);
+        if (!res.ok) {
+          setSlotsError("Konnte Turnierliste nicht laden");
+          return;
+        }
+        const data = await res.json();
+        setTournamentSlots(data?.slots ?? []);
+      } catch (e) {
+        console.warn("Konnte Turnier-Slots nicht laden", e);
+        setSlotsError("Konnte Turnierliste nicht laden");
+      } finally {
+        setSlotsLoading(false);
+      }
+    };
+
+    loadSlots();
+  }, []);
 
   // Abgeleitete Daten für Spieler-Ansicht und Benachrichtigungen
   const playerViewSelectedPlayer = useMemo(
@@ -1221,6 +1261,239 @@ const exportTournament = () => {
       )}
     </div>
   );
+
+  const handleCreateTournament = async () => {
+    if (!BACKEND_BASE) return;
+    setSlotsError(null);
+    if (!newTournamentName.trim() || !newOperatorPassword.trim() || !masterPassword.trim()) {
+      setSlotsError("Bitte Name, Turnier-Passwort und Master-Passwort ausfüllen");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${BACKEND_BASE}/tournaments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newTournamentName.trim(),
+          operatorPassword: newOperatorPassword.trim(),
+          masterPassword: masterPassword.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setSlotsError(text || "Turnier konnte nicht angelegt werden");
+        return;
+      }
+      setNewTournamentName("");
+      setNewOperatorPassword("");
+      // Master-Passwort-Feld bewusst nicht löschen, damit es für mehrere Aktionen genutzt werden kann
+
+      // Liste aktualisieren
+      const listRes = await fetch(`${BACKEND_BASE}/tournaments`);
+      if (listRes.ok) {
+        const data = await listRes.json();
+        setTournamentSlots(data?.slots ?? []);
+      }
+    } catch (e) {
+      console.warn("Konnte Turnier nicht anlegen", e);
+      setSlotsError("Turnier konnte nicht angelegt werden");
+    }
+  };
+
+  const handleDeleteTournament = async (id: string) => {
+    if (!BACKEND_BASE) return;
+    if (!masterPassword.trim()) {
+      setSlotsError("Zum Löschen bitte das Master-Passwort eingeben");
+      return;
+    }
+
+    const confirmDelete = window.confirm(
+      `Turnier ${id} wirklich löschen? Alle Spielstände dieses Slots werden entfernt.`
+    );
+    if (!confirmDelete) return;
+
+    try {
+      const res = await fetch(`${BACKEND_BASE}/tournaments/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ masterPassword: masterPassword.trim() }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setSlotsError(text || "Turnier konnte nicht gelöscht werden");
+        return;
+      }
+
+      // Liste aktualisieren
+      const listRes = await fetch(`${BACKEND_BASE}/tournaments`);
+      if (listRes.ok) {
+        const data = await listRes.json();
+        setTournamentSlots(data?.slots ?? []);
+      }
+    } catch (e) {
+      console.warn("Konnte Turnier nicht löschen", e);
+      setSlotsError("Turnier konnte nicht gelöscht werden");
+    }
+  };
+
+  const renderTournamentSelection = () => {
+    return (
+      <div
+        style={{
+          maxWidth: 800,
+          margin: "2rem auto",
+          padding: "1.5rem",
+          borderRadius: 12,
+          background: "#111",
+          color: "#eee",
+          boxShadow: "0 0 20px rgba(0,0,0,0.4)",
+          fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Turnier auswählen</h2>
+        <p style={{ fontSize: 14, opacity: 0.8 }}>
+          Wähle ein bestehendes Turnier oder lege ein neues an. Zum Löschen oder Anlegen
+          ist das Master-Passwort erforderlich.
+        </p>
+
+        <div style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 8, fontSize: 16 }}>Vorhandene Turniere</h3>
+          {slotsLoading ? (
+            <div>Turnierliste wird geladen…</div>
+          ) : tournamentSlots.filter((s) => s.occupied).length === 0 ? (
+            <div style={{ fontSize: 14, opacity: 0.8 }}>Noch keine Turniere angelegt.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {tournamentSlots
+                .filter((s) => s.occupied)
+                .map((slot) => (
+                  <div
+                    key={slot.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "0.5rem 0.75rem",
+                      borderRadius: 8,
+                      border: "1px solid #333",
+                      background: "#181818",
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600 }}>{slot.name || slot.id}</div>
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>Slot: /{slot.id}</div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (typeof window !== "undefined") {
+                          window.location.href = `/${slot.id}`;
+                        }
+                      }}
+                      style={{
+                        padding: "0.35rem 0.8rem",
+                        borderRadius: 999,
+                        border: "none",
+                        background: "#2196F3",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontSize: 13,
+                      }}
+                    >
+                      Öffnen
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTournament(slot.id)}
+                      style={{
+                        padding: "0.35rem 0.8rem",
+                        borderRadius: 999,
+                        border: "none",
+                        background: "#f44336",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontSize: 13,
+                      }}
+                    >
+                      Löschen
+                    </button>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+
+        <hr style={{ margin: "1.5rem 0", borderColor: "#333" }} />
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <h3 style={{ marginBottom: 4, fontSize: 16 }}>Neues Turnier anlegen</h3>
+          <input
+            type="text"
+            placeholder="Turniername"
+            value={newTournamentName}
+            onChange={(e) => setNewTournamentName(e.target.value)}
+            style={{
+              padding: "0.4rem 0.6rem",
+              borderRadius: 6,
+              border: "1px solid #444",
+              background: "#000",
+              color: "#fff",
+            }}
+          />
+          <input
+            type="password"
+            placeholder="Passwort Turnierleitung"
+            value={newOperatorPassword}
+            onChange={(e) => setNewOperatorPassword(e.target.value)}
+            style={{
+              padding: "0.4rem 0.6rem",
+              borderRadius: 6,
+              border: "1px solid #444",
+              background: "#000",
+              color: "#fff",
+            }}
+          />
+          <input
+            type="password"
+            placeholder="Master-Passwort (für Anlegen/Löschen)"
+            value={masterPassword}
+            onChange={(e) => setMasterPassword(e.target.value)}
+            style={{
+              padding: "0.4rem 0.6rem",
+              borderRadius: 6,
+              border: "1px solid #444",
+              background: "#000",
+              color: "#fff",
+            }}
+          />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+            <button
+              onClick={handleCreateTournament}
+              style={{
+                padding: "0.4rem 0.9rem",
+                borderRadius: 999,
+                border: "none",
+                background: "#4CAF50",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: 13,
+              }}
+            >
+              Anlegen
+            </button>
+          </div>
+          {slotsError && (
+            <div style={{ color: "#ff7961", fontSize: 12 }}>{slotsError}</div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Pre-Start: nur Turnierleitung sieht Settings, alle anderen direkt Zuschaueransicht
+  if (!TOURNAMENT_ID) {
+    // Root-URL: Turnier-Auswahlbildschirm mit Anlegen/Löschen
+    return renderTournamentSelection();
+  }
 
   // Pre-Start: nur Turnierleitung sieht Settings, alle anderen direkt Zuschaueransicht
   if (!isStarted && isOperator) {
