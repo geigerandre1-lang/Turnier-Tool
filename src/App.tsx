@@ -22,29 +22,45 @@ const BACKEND_BASE =
     ? "http://localhost:4000"
     : "";
 
+const getTournamentId = () => {
+  if (typeof window === "undefined") return null;
+  try {
+    const url = new URL(window.location.href);
+    const segments = url.pathname.split("/").filter(Boolean);
+    return segments.length > 0 ? segments[0] : null;
+  } catch {
+    return null;
+  }
+};
+
+const TOURNAMENT_ID = getTournamentId();
+const STATE_QUERY = TOURNAMENT_ID ? `?t=${encodeURIComponent(TOURNAMENT_ID)}` : "";
+
 export default function App() {
+  const storageKey = (base: string) => (TOURNAMENT_ID ? `${TOURNAMENT_ID}:${base}` : base);
+
   const [players, setPlayers] = useState<Player[]>(() => {
-    const stored = localStorage.getItem("players");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("players")) : null;
     return stored ? JSON.parse(stored) : [];
   });
 
   const [isStarted, setIsStarted] = useState<boolean>(() => {
-    const stored = localStorage.getItem("isStarted");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("isStarted")) : null;
     return stored ? JSON.parse(stored) : false;
   });
 
   const [isDoubleKO, setIsDoubleKO] = useState<boolean>(() => {
-    const stored = localStorage.getItem("isDoubleKO");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("isDoubleKO")) : null;
     return stored ? JSON.parse(stored) : false;
   });
 
   const [mode, setMode] = useState<"ko" | "league" | "groups">(() => {
-    const stored = localStorage.getItem("mode");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("mode")) : null;
     return stored === "league" || stored === "groups" ? (stored as any) : "ko";
   });
 
   const [matches, setMatches] = useState<Record<string, MatchNode>>(() => {
-    const stored = localStorage.getItem("matches");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("matches")) : null;
     return stored ? JSON.parse(stored) : {};
   });
 
@@ -58,11 +74,11 @@ export default function App() {
   const [isNarrow, setIsNarrow] = useState(false);
   const [publicAnnouncement, setPublicAnnouncement] = useState<string>(() => {
     if (typeof window === "undefined") return "";
-    return localStorage.getItem("publicAnnouncement") || "";
+    return localStorage.getItem(storageKey("publicAnnouncement")) || "";
   });
   const [announcementNotificationId, setAnnouncementNotificationId] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
-    const stored = localStorage.getItem("announcementNotificationId");
+    const stored = localStorage.getItem(storageKey("announcementNotificationId"));
     const n = stored ? Number(stored) : NaN;
     return Number.isFinite(n) ? n : null;
   });
@@ -70,23 +86,23 @@ export default function App() {
   const [initialActiveAutomats, setInitialActiveAutomats] = useState(4);
   const [playerViewSelectedId, setPlayerViewSelectedId] = useState<string | "">(() => {
     if (typeof window === "undefined") return "";
-    return localStorage.getItem("playerView.selectedPlayerId") || "";
+    return localStorage.getItem(storageKey("playerView.selectedPlayerId")) || "";
   });
   const [playerViewNotificationsEnabled, setPlayerViewNotificationsEnabled] = useState<boolean>(
     () => {
       if (typeof window === "undefined") return false;
-      const stored = localStorage.getItem("playerView.notificationsEnabled");
+      const stored = localStorage.getItem(storageKey("playerView.notificationsEnabled"));
       return stored === "true";
     }
   );
 
   const [pointScheme, setPointScheme] = useState(() => {
-    const stored = localStorage.getItem("pointScheme");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("pointScheme")) : null;
     return stored ? JSON.parse(stored) : { win: 3, loss: 0 };
   });
 
   const [automats, setAutomats] = useState<Automat[]>(() => {
-    const stored = localStorage.getItem("automats");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("automats")) : null;
     return stored ? JSON.parse(stored) : Array.from({ length: maxAutomats }, (_, i) => ({
       id: i + 1,
       name: `Automat ${i + 1}`,
@@ -96,30 +112,30 @@ export default function App() {
   });
 
   const [waitTimerMinutes, setWaitTimerMinutes] = useState(() => {
-    const stored = localStorage.getItem("waitTimerMinutes");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("waitTimerMinutes")) : null;
     const val = stored ? parseInt(stored, 10) : 5;
     return isNaN(val) ? 5 : Math.max(1, val);
   });
 
   const [matchTimerMinutes, setMatchTimerMinutes] = useState(() => {
-    const stored = localStorage.getItem("matchTimerMinutes");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("matchTimerMinutes")) : null;
     const val = stored ? parseInt(stored, 10) : 10;
     return isNaN(val) ? 10 : Math.max(1, val);
   });
 
   const [bestOf, setBestOf] = useState(() => {
-    const stored = localStorage.getItem("bestOf");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("bestOf")) : null;
     const val = stored ? parseInt(stored, 10) : 5;
     return isNaN(val) ? 5 : val;
   });
 
   const [useLegsInKO, setUseLegsInKO] = useState<boolean>(() => {
-    const stored = localStorage.getItem("useLegsInKO");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("useLegsInKO")) : null;
     return stored ? JSON.parse(stored) : false;
   });
 
   const [groupSize, setGroupSize] = useState<number>(() => {
-    const stored = localStorage.getItem("groupSize");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("groupSize")) : null;
     const val = stored ? parseInt(stored, 10) : 4;
     return isNaN(val) ? 4 : Math.max(2, val);
   });
@@ -169,7 +185,7 @@ export default function App() {
 
   // Einfache Operator-Authentifizierung (lokal im Browser)
   const [isOperator, setIsOperator] = useState<boolean>(() => {
-    const stored = localStorage.getItem("isOperator");
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("isOperator")) : null;
     return stored ? JSON.parse(stored) : false;
   });
   const [authToken, setAuthToken] = useState<string | null>(() => {
@@ -283,42 +299,42 @@ export default function App() {
   }, [matchTimerMinutes]);
 
   useEffect(() => {
-    localStorage.setItem("waitTimerMinutes", waitTimerMinutes.toString());
+    localStorage.setItem(storageKey("waitTimerMinutes"), waitTimerMinutes.toString());
   }, [waitTimerMinutes]);
 
   useEffect(() => {
-    localStorage.setItem("timersEnabled", JSON.stringify(timersEnabled));
+    localStorage.setItem(storageKey("timersEnabled"), JSON.stringify(timersEnabled));
   }, [timersEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("bestOf", bestOf.toString());
+    localStorage.setItem(storageKey("bestOf"), bestOf.toString());
   }, [bestOf]);
 
   useEffect(() => {
-    localStorage.setItem("useLegsInKO", JSON.stringify(useLegsInKO));
+    localStorage.setItem(storageKey("useLegsInKO"), JSON.stringify(useLegsInKO));
   }, [useLegsInKO]);
 
   useEffect(() => {
-    localStorage.setItem("groupSize", groupSize.toString());
+    localStorage.setItem(storageKey("groupSize"), groupSize.toString());
   }, [groupSize]);
 
   // Persist Automats
   useEffect(() => {
-    localStorage.setItem("automats", JSON.stringify(automats));
+    localStorage.setItem(storageKey("automats"), JSON.stringify(automats));
   }, [automats]);
 
   // Persist Player-View Auswahl und Benachrichtigungs-Einstellung
   useEffect(() => {
     if (playerViewSelectedId) {
-      localStorage.setItem("playerView.selectedPlayerId", playerViewSelectedId);
+      localStorage.setItem(storageKey("playerView.selectedPlayerId"), playerViewSelectedId);
     } else {
-      localStorage.removeItem("playerView.selectedPlayerId");
+      localStorage.removeItem(storageKey("playerView.selectedPlayerId"));
     }
   }, [playerViewSelectedId]);
 
   useEffect(() => {
     localStorage.setItem(
-      "playerView.notificationsEnabled",
+      storageKey("playerView.notificationsEnabled"),
       playerViewNotificationsEnabled ? "true" : "false"
     );
   }, [playerViewNotificationsEnabled]);
@@ -345,43 +361,43 @@ export default function App() {
 
   // Persist Players
   useEffect(() => {
-    localStorage.setItem("players", JSON.stringify(players));
+    localStorage.setItem(storageKey("players"), JSON.stringify(players));
   }, [players]);
 
   // Persist points scheme
   useEffect(() => {
-    localStorage.setItem("pointScheme", JSON.stringify(pointScheme));
+    localStorage.setItem(storageKey("pointScheme"), JSON.stringify(pointScheme));
   }, [pointScheme]);
 
   // Persist isStarted
   useEffect(() => {
-    localStorage.setItem("isStarted", JSON.stringify(isStarted));
+    localStorage.setItem(storageKey("isStarted"), JSON.stringify(isStarted));
   }, [isStarted]);
 
   // Persist isDoubleKO
   useEffect(() => {
-    localStorage.setItem("isDoubleKO", JSON.stringify(isDoubleKO));
+    localStorage.setItem(storageKey("isDoubleKO"), JSON.stringify(isDoubleKO));
   }, [isDoubleKO]);
 
   // Persist mode (KO oder Liga)
   useEffect(() => {
-    localStorage.setItem("mode", mode);
+    localStorage.setItem(storageKey("mode"), mode);
   }, [mode]);
 
   // Persist Matches
   useEffect(() => {
-    localStorage.setItem("matches", JSON.stringify(matches));
+    localStorage.setItem(storageKey("matches"), JSON.stringify(matches));
   }, [matches]);
 
   useEffect(() => {
-    localStorage.setItem("publicAnnouncement", publicAnnouncement);
+    localStorage.setItem(storageKey("publicAnnouncement"), publicAnnouncement);
   }, [publicAnnouncement]);
 
   useEffect(() => {
     if (announcementNotificationId == null) {
       localStorage.removeItem("announcementNotificationId");
     } else {
-      localStorage.setItem("announcementNotificationId", String(announcementNotificationId));
+      localStorage.setItem(storageKey("announcementNotificationId"), String(announcementNotificationId));
     }
   }, [announcementNotificationId]);
 
@@ -501,14 +517,14 @@ export default function App() {
 
   // Persist Operator-Status pro Browser
   useEffect(() => {
-    localStorage.setItem("isOperator", JSON.stringify(isOperator));
+    localStorage.setItem(storageKey("isOperator"), JSON.stringify(isOperator));
   }, [isOperator]);
 
   useEffect(() => {
     if (authToken) {
-      localStorage.setItem("authToken", authToken);
+      localStorage.setItem(storageKey("authToken"), authToken);
     } else {
-      localStorage.removeItem("authToken");
+      localStorage.removeItem(storageKey("authToken"));
     }
   }, [authToken]);
 
