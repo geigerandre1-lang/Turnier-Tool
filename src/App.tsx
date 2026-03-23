@@ -208,6 +208,23 @@ export default function App() {
       setAnnouncementNotificationId(data.announcementNotificationId);
   };
 
+  // Turnier-ID aus der URL ableiten, z.B. /turnier1, /turnier2, ...
+  const tournamentId = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const url = new URL(window.location.href);
+      const segments = url.pathname.split("/").filter(Boolean);
+      // Erstes Segment als Turnier-ID verwenden ("turnier1" bei /turnier1/...)
+      return segments.length > 0 ? segments[0] : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const stateQuery = useMemo(() => {
+    return tournamentId ? `?t=${encodeURIComponent(tournamentId)}` : "";
+  }, [tournamentId]);
+
   // Timer initialisieren und automatisch starten
   useEffect(() => {
     if (!isStarted || !timersEnabled) return;
@@ -372,7 +389,7 @@ export default function App() {
   useEffect(() => {
     const loadFromServer = async () => {
       try {
-        const res = await fetch(`${BACKEND_BASE}/state`);
+        const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`);
         if (!res.ok) return;
         const data = await res.json();
         applyBackendState(data);
@@ -382,7 +399,7 @@ export default function App() {
     };
 
     loadFromServer();
-  }, []);
+  }, [stateQuery]);
 
   // Turnier-Status an Backend senden, wenn sich der Kernzustand ändert
   useEffect(() => {
@@ -414,7 +431,7 @@ export default function App() {
           headers["Authorization"] = `Bearer ${authToken}`;
         }
 
-        const res = await fetch(`${BACKEND_BASE}/state`, {
+        const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`, {
           method: "POST",
           headers,
           body: JSON.stringify(payload),
@@ -452,6 +469,7 @@ export default function App() {
     announcementNotificationId,
     isOperator,
     authToken,
+    stateQuery,
   ]);
 
   // Nicht-Operator-Clients: regelmäßig Turnier-Status vom Backend nachladen
@@ -462,7 +480,7 @@ export default function App() {
 
     const pollFromServer = async () => {
       try {
-        const res = await fetch(`${BACKEND_BASE}/state`);
+        const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) {
@@ -479,7 +497,7 @@ export default function App() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [isOperator]);
+  }, [isOperator, stateQuery]);
 
   // Persist Operator-Status pro Browser
   useEffect(() => {

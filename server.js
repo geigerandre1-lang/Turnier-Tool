@@ -8,17 +8,28 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-// Statische Dateien aus dem build-Ordner ausliefern
-app.use(express.static(path.join(__dirname, "build")));
+const BUILD_DIR = path.join(__dirname, "build");
 
-const STATE_FILE = path.join(__dirname, "tournament-state.json");
+// Mehrere Turniere parallel über Query-Parameter ?t=turnier1 speichern
+const DEFAULT_TOURNAMENT_ID = "default";
+
+function getStateFile(tournamentId) {
+  const raw = typeof tournamentId === "string" && tournamentId.trim().length > 0
+    ? tournamentId.trim()
+    : DEFAULT_TOURNAMENT_ID;
+
+  // Sehr einfache "Sanitizer"-Logik, um Pfad-Traversal zu verhindern
+  const safe = raw.replace(/[^a-zA-Z0-9_-]/g, "-");
+  return path.join(__dirname, `tournament-state-${safe}.json`);
+}
 
 // Einfache Admin-Authentifizierung über statisches Passwort + JWT
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "change-me";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-secret";
 
-function readState() {
+function readState(tournamentId) {
   try {
+    const STATE_FILE = getStateFile(tournamentId);
     if (!fs.existsSync(STATE_FILE)) return null;
     const data = fs.readFileSync(STATE_FILE, "utf8");
     return JSON.parse(data);
@@ -28,8 +39,9 @@ function readState() {
   }
 }
 
-function writeState(state) {
+function writeState(tournamentId, state) {
   try {
+    const STATE_FILE = getStateFile(tournamentId);
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
   } catch (e) {
     console.error("Failed to write state file", e);
@@ -70,7 +82,8 @@ app.post("/login", (req, res) => {
 });
 
 app.get("/state", (req, res) => {
-  const state = readState();
+  const tournamentId = req.query.t;
+  const state = readState(tournamentId);
   if (!state) {
     return res.status(404).json({ message: "No state stored yet" });
   }
@@ -78,13 +91,24 @@ app.get("/state", (req, res) => {
 });
 
 app.post("/state", verifyToken, (req, res) => {
+  const tournamentId = req.query.t;
   const state = req.body || {};
   try {
-    writeState(state);
+    writeState(tournamentId, state);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: "Failed to persist state" });
   }
+});
+
+// Statische Dateien aus dem build-Ordner ausliefern
+// Root-Variante: /
+app.use(express.static(BUILD_DIR));
+
+// Zusätzliche Pfade für mehrere Turniere, z.B. /turnier1, /turnier2, ...
+const TOURNAMENT_PATHS = ["/turnier1", "/turnier2", "/turnier3", "/turnier4"]; // ggf. anpassen
+TOURNAMENT_PATHS.forEach((basePath) => {
+  app.use(basePath, express.static(BUILD_DIR));
 });
 
 const PORT = process.env.PORT || 4000;
