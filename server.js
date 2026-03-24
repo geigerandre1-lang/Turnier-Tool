@@ -4,9 +4,21 @@ const fs = require("fs");
 const path = require("path");
 const jwt = require("jsonwebtoken");
 
+const http = require("http");
+const { Server: SocketServer } = require("socket.io");
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+
+// ===== PHASE 2.4: Socket.io Server Setup =====
+const server = http.createServer(app);
+const io = new SocketServer(server, {
+  cors: {
+    origin: "*",  // TODO: restrict in production
+    methods: ["GET", "POST"]
+  }
+});
 
 const BUILD_DIR = path.join(__dirname, "build");
 
@@ -27,7 +39,34 @@ function getStateFile(tournamentId) {
   return path.join(__dirname, `tournament-state-${safe}.json`);
 }
 
-// Master-Passwort (kann alle Turniere verwalten) + JWT-Secret
+// ===== SECURITY: Secrets Validation (Phase 2.1) =====
+// In production, secrets MUST be set. No defaults allowed.
+function validateSecrets() {
+  const masterPwd = process.env.MASTER_PASSWORD || process.env.ADMIN_PASSWORD;
+  const jwtSecret = process.env.JWT_SECRET;
+
+  const isProduction = process.env.NODE_ENV === "production";
+  const hasDefaults = !masterPwd || masterPwd === "change-me" || !jwtSecret || jwtSecret === "change-me-secret";
+
+  if (isProduction && hasDefaults) {
+    console.error(
+      "CRITICAL: In production, you MUST set MASTER_PASSWORD and JWT_SECRET environment variables.\n" +
+      "DO NOT use default values. Exiting.\n" +
+      "Example: export MASTER_PASSWORD=\"your-secure-pwd\" && export JWT_SECRET=\"your-secure-secret\""
+    );
+    process.exit(1);
+  }
+
+  if (hasDefaults) {
+    console.warn(
+      "WARNING: Using default secrets (MASTER_PASSWORD, JWT_SECRET).\n" +
+      "For production use, set these as environment variables."
+    );
+  }
+}
+
+validateSecrets();
+
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || process.env.ADMIN_PASSWORD || "change-me";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-secret";
 
@@ -91,80 +130,161 @@ function writeState(tournamentId, state) {
   }
 }
 
-function verifyToken(req, res, next) {
-  const authHeader = req.headers["authorization"] || "";
-  const [, token] = authHeader.split(" ");
+function emitTournamentStateChanged(tournamentId, payload = {}) {
+  const roomName = `tournament:${tournamentId}`;
+  io.to(roomName).emit("tournament:state-changed", {
+    timestamp: new Date().toISOString(),
+    tournamentId,
+    ...payload,
+  });
+}
 
-  if (!token) {
-    return res.status(401).json({ ok: false, error: "Missing token" });
-  }
+/**
+ * ===== MIDDLEWARE: Authentication & Authorization (Phase 2.1) =====
+ */
+
+// Standard error responses
+const APIError = {
+  UNAUTHORIZED: { status: 401, code: "UNAUTHORIZED", message: "Missing or invalid authentication token" },
+  FORBIDDEN: { status: 403, code: "FORBIDDEN", message: "Insufficient permissions for this action" },
+  NOT_FOUND: { status: 404, code: "NOT_FOUND", message: "Resource not found" },
+  INVALID_STATE: { status: 409, code: "INVALID_STATE", message: "Tournament or match state does not permit this action" },
+  VALIDATION_ERROR: { status: 400, code: "VALIDATION_ERROR", message: "Input validation failed" },
+  INTERNAL_ERROR: { status: 500, code: "INTERNAL_ERROR", message: "Server error" },
+};
+
+function sendError(res, errorType, details = {}) {
+  const error = APIError[errorType] || APIError.INTERNAL_ERROR;
+  return res.status(error.status).json({
+    ok: false,
+    code: error.code,
+    message: error.message,
+    ...details,
+  });
+}
+
+/**
+ * Extract JWT token from Authorization header
+ * Returns decoded payload or null if invalid/missing
+ */
+function extractToken(req) {
+  const authHeader = req.headers["authorization"] || "";
+  const [scheme, token] = authHeader.split(" ");
+
+  if (scheme !== "Bearer" || !token) return null;
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (!payload || !payload.role) {
-      return res.status(403).json({ ok: false, error: "Forbidden" });
-    }
-
-    const tournamentId = req.query.t;
-
-    // Master darf alles
-    if (payload.role === "master") {
-      req.user = payload;
-      return next();
-    }
-
-    // Operator darf nur das eigene Turnier bearbeiten
-    if (payload.role === "operator") {
-      if (!payload.tournamentId) {
-        return res.status(403).json({ ok: false, error: "Tournament context missing" });
-      }
-      const expected = typeof tournamentId === "string" && tournamentId.trim().length > 0
-        ? tournamentId.trim()
-        : DEFAULT_TOURNAMENT_ID;
-
-      if (payload.tournamentId !== expected) {
-        return res.status(403).json({ ok: false, error: "Forbidden for this tournament" });
-      }
-      req.user = payload;
-      return next();
-    }
-
-    return res.status(403).json({ ok: false, error: "Forbidden" });
+    return jwt.verify(token, JWT_SECRET);
   } catch (e) {
-    return res.status(401).json({ ok: false, error: "Invalid token" });
+    return null;
   }
 }
 
-app.post("/login", (req, res) => {
-  const { password, tournamentId } = req.body || {};
+/**
+ * REQUIRED: Verify token and enforce role-based access
+ * Roles: master (all tournaments), operator (own tournament), spectator (read-only)
+ */
+function verifyToken(req, res, next) {
+  const payload = extractToken(req);
 
-  if (!password) {
-    return res.status(400).json({ ok: false, error: "Password required" });
+  if (!payload) {
+    return sendError(res, "UNAUTHORIZED");
   }
 
-  // Master-Login
+  const tournamentId = req.query.t || req.params.id;
+  const { role, tournamentId: tokenTournamentId } = payload;
+
+  // Master: full access to all tournaments
+  if (role === "master") {
+    req.user = payload;
+    return next();
+  }
+
+  // Operator/Spectator: scoped to own tournament
+  if (role === "operator" || role === "spectator") {
+    if (!tokenTournamentId) {
+      return sendError(res, "FORBIDDEN", { reason: "Tournament context missing in token" });
+    }
+    if (tokenTournamentId !== tournamentId) {
+      return sendError(res, "FORBIDDEN", { reason: "No access to this tournament" });
+    }
+    req.user = payload;
+    return next();
+  }
+
+  return sendError(res, "FORBIDDEN", { reason: `Unknown role: ${role}` });
+}
+
+/**
+ * OPTIONAL: Verify token if provided, otherwise allow as guest (for spectators)
+ */
+function optionalAuth(req, res, next) {
+  const payload = extractToken(req);
+  if (payload) {
+    req.user = payload;
+  }
+  next();
+}
+
+/**
+ * Ensure user has write permission (not spectator/player)
+ */
+function requireWrite(req, res, next) {
+  if (req.user?.role === "spectator" || req.user?.role === "player") {
+    return sendError(res, "FORBIDDEN", { reason: "This role is read-only" });
+  }
+  next();
+}
+
+/**
+ * POST /login
+ * Authenticate operator or master. Issues JWT token valid for 12h.
+ */
+app.post("/login", (req, res) => {
+  const { password, tournamentId, playerId } = req.body || {};
+
+  if (!password || typeof password !== "string") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "password required" });
+  }
+
+  // Master login (can manage all tournaments)
   if (password === MASTER_PASSWORD) {
-    const token = jwt.sign({ role: "master" }, JWT_SECRET, { expiresIn: "12h" });
+    const token = jwt.sign(
+      { role: "master", exp: Math.floor(Date.now() / 1000) + 12 * 3600 },
+      JWT_SECRET
+    );
     return res.json({ ok: true, token, role: "master" });
   }
 
-  // Operator-Login für spezifisches Turnier
-  const meta = readTournamentsMeta();
-  const id = typeof tournamentId === "string" && tournamentId.trim().length > 0
-    ? tournamentId.trim()
-    : DEFAULT_TOURNAMENT_ID;
-
-  const slot = meta[id];
-  if (!slot || !slot.operatorPassword || slot.operatorPassword !== password) {
-    return res.status(401).json({ ok: false, error: "Invalid credentials" });
+  // Operator login (for specific tournament)
+  if (!tournamentId || typeof tournamentId !== "string") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "tournamentId required for operator login" });
   }
 
-  const token = jwt.sign({ role: "operator", tournamentId: id }, JWT_SECRET, { expiresIn: "12h" });
+  const meta = readTournamentsMeta();
+  const id = tournamentId.trim();
+  const slot = meta[id];
 
-  res.json({ ok: true, token, role: "operator" });
+  if (!slot || !slot.operatorPassword) {
+    return sendError(res, "NOT_FOUND", { reason: "Tournament not found" });
+  }
+
+  if (slot.operatorPassword !== password) {
+    return sendError(res, "UNAUTHORIZED", { reason: "Invalid operator password" });
+  }
+
+  const token = jwt.sign(
+    { role: "operator", tournamentId: id, exp: Math.floor(Date.now() / 1000) + 12 * 3600 },
+    JWT_SECRET
+  );
+
+  return res.json({ ok: true, token, role: "operator", tournament: { id, name: slot.name } });
 });
 
-// Übersicht der Turnier-Slots
+/**
+ * GET /tournaments
+ * List available tournament slots (public)
+ */
 app.get("/tournaments", (req, res) => {
   const meta = readTournamentsMeta();
   const slots = TOURNAMENT_SLOTS.map((id) => {
@@ -178,12 +298,18 @@ app.get("/tournaments", (req, res) => {
   res.json({ slots });
 });
 
-// Neues Turnier anlegen (ohne Auth, Passwort nur für Turnierleitung)
+/**
+ * POST /tournaments
+ * Create new tournament (public, no auth required)
+ */
 app.post("/tournaments", (req, res) => {
-  const { name, operatorPassword } = req.body || {};
+  const { name, operatorPassword, masterPassword } = req.body || {};
 
-  if (!name || typeof name !== "string" || !operatorPassword) {
-    return res.status(400).json({ ok: false, error: "Name and operatorPassword required" });
+  if (!name || typeof name !== "string") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "Tournament name required" });
+  }
+  if (!operatorPassword || typeof operatorPassword !== "string") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "operatorPassword required" });
   }
 
   const meta = readTournamentsMeta();
@@ -193,7 +319,7 @@ app.post("/tournaments", (req, res) => {
   });
 
   if (!freeId) {
-    return res.status(400).json({ ok: false, error: "No free tournament slots" });
+    return sendError(res, "INVALID_STATE", { reason: "No free tournament slots" });
   }
 
   meta[freeId] = {
@@ -204,7 +330,7 @@ app.post("/tournaments", (req, res) => {
 
   writeTournamentsMeta(meta);
 
-   // Vorsichtshalber alten State dieses Slots löschen, damit das Turnier sauber startet
+  // Clear old state file for clean start
   try {
     const stateFile = getStateFile(freeId);
     if (fs.existsSync(stateFile)) {
@@ -214,7 +340,7 @@ app.post("/tournaments", (req, res) => {
     console.error("Failed to delete previous state file for", freeId, e);
   }
 
-  res.json({
+  res.status(201).json({
     ok: true,
     slot: {
       id: freeId,
@@ -224,39 +350,42 @@ app.post("/tournaments", (req, res) => {
   });
 });
 
-// Turnier löschen (mit Turnier- oder Master-Passwort)
+/**
+ * DELETE /tournaments/:id
+ * Delete tournament (requires operator or master password for confirmation)
+ */
 app.delete("/tournaments/:id", (req, res) => {
   const { password } = req.body || {};
   const id = req.params.id;
 
   if (!TOURNAMENT_SLOTS.includes(id)) {
-    return res.status(400).json({ ok: false, error: "Unknown tournament slot" });
+    return sendError(res, "VALIDATION_ERROR", { reason: "Unknown tournament slot" });
   }
 
   const meta = readTournamentsMeta();
   const slot = meta[id];
   if (!slot || !slot.name) {
-    return res.status(400).json({ ok: false, error: "Tournament slot is empty" });
+    return sendError(res, "NOT_FOUND", { reason: "Tournament slot is empty" });
   }
 
-  if (!password) {
-    return res.status(401).json({ ok: false, error: "Password required" });
+  if (!password || typeof password !== "string") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "password required for confirmation" });
   }
 
   const isMaster = password === MASTER_PASSWORD;
   const isOperator = !!slot.operatorPassword && password === slot.operatorPassword;
 
   if (!isMaster && !isOperator) {
-    return res.status(401).json({ ok: false, error: "Invalid password" });
+    return sendError(res, "UNAUTHORIZED", { reason: "Invalid password" });
   }
 
-  // Passwort war gültig: Slot leeren
+  // Clear tournament
   slot.name = null;
   slot.operatorPassword = null;
   meta[id] = slot;
   writeTournamentsMeta(meta);
 
-  // Zugehörige State-Datei entfernen
+  // Delete state file
   try {
     const stateFile = getStateFile(id);
     if (fs.existsSync(stateFile)) {
@@ -269,24 +398,440 @@ app.delete("/tournaments/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/state", (req, res) => {
+/**
+ * GET /state?t=tournamentId
+ * Fetch tournament state. Optional auth:
+ * - Without token: spectator read (public)
+ * - With token: full access per role
+ */
+app.get("/state", optionalAuth, (req, res) => {
   const tournamentId = req.query.t;
+
+  if (!tournamentId || typeof tournamentId !== "string") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "tournamentId (query param 't') required" });
+  }
+
+  // If authenticated, verify tournament access
+  if (req.user) {
+    const { role, tournamentId: tokenTournamentId } = req.user;
+    if (role !== "master" && tokenTournamentId !== tournamentId) {
+      return sendError(res, "FORBIDDEN");
+    }
+  }
+
   const state = readState(tournamentId);
   if (!state) {
-    return res.status(404).json({ message: "No state stored yet" });
+    return sendError(res, "NOT_FOUND", { reason: "No state stored for this tournament yet" });
   }
+
   res.json(state);
 });
 
-app.post("/state", verifyToken, (req, res) => {
+/**
+ * POST /state?t=tournamentId (LEGACY, deprecated Phase 6)
+ * Bulk update tournament state. Requires operator/master auth.
+ * Future: Clients should prefer PATCH /tournaments/:id/matches/:matchId
+ */
+app.post("/state", verifyToken, requireWrite, (req, res) => {
   const tournamentId = req.query.t;
   const state = req.body || {};
+
+  if (!state || typeof state !== "object") {
+    return sendError(res, "VALIDATION_ERROR", { reason: "Request body must be tournament state object" });
+  }
+
   try {
     writeState(tournamentId, state);
-    res.json({ ok: true });
+    emitTournamentStateChanged(tournamentId, { state });
+    res.json({ ok: true, state });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "Failed to persist state" });
+    console.error("Failed to persist state:", e);
+    return sendError(res, "INTERNAL_ERROR");
   }
+});
+
+/**
+ * ===== PHASE 2.2: Granular Match Endpoints =====
+ * New endpoints for fine-grained match result updates
+ * These replace bulk POST /state in phases 4-6
+ */
+
+/**
+ * Helper: Calculate winner from legs
+ */
+function calculateWinner(match, legs1, legs2, bestOf) {
+  if (legs1 === null || legs2 === null) return null;
+  
+  const legsToWin = Math.ceil(bestOf / 2);
+  if (legs1 >= legsToWin) return match.player1;
+  if (legs2 >= legsToWin) return match.player2;
+  return null;
+}
+
+/**
+ * Helper: Clear automat info from match
+ */
+function clearAutomatInfo(match) {
+  match.isOnAutomat = false;
+  match.isNextInAutomatQueue = false;
+  match.automatNumber = undefined;
+  match.automatName = undefined;
+}
+
+/**
+ * Helper: Propagate winner to next matches
+ * Returns array of affected matches
+ */
+function propagateWinner(matches, matchId, newWinner, newLoser, prevWinner) {
+  const affected = [];
+  const match = matches[matchId];
+  if (!match) return affected;
+
+  const prevLoser = prevWinner
+    ? prevWinner === match.player1 ? match.player2 : match.player1
+    : null;
+
+  // Propagate to winner bracket
+  if (match.winnerTo) {
+    const nextMatch = matches[match.winnerTo.matchId];
+    if (nextMatch) {
+      if (match.winnerTo.slot === 1) nextMatch.player1 = newWinner;
+      else nextMatch.player2 = newWinner;
+      affected.push(nextMatch.id);
+    }
+  }
+
+  // Propagate to loser bracket (double elimination)
+  if (match.loserTo && newLoser) {
+    const nextMatch = matches[match.loserTo.matchId];
+    if (nextMatch) {
+      const slotKey = match.loserTo.slot === 1 ? "player1" : "player2";
+      
+      // If old loser was in slot, clear that match first
+      if (prevLoser && nextMatch[slotKey] === prevLoser) {
+        clearMatch(matches, nextMatch.id);
+      }
+
+      nextMatch[slotKey] = newLoser;
+      affected.push(nextMatch.id);
+    }
+  }
+
+  return affected;
+}
+
+/**
+ * Helper: Clear a match and cascade clearing dependent matches
+ */
+function clearMatch(matches, matchId) {
+  const match = matches[matchId];
+  if (!match) return [];
+
+  const wasWinner = match.winner;
+  match.winner = null;
+  match.legs1 = null;
+  match.legs2 = null;
+  clearAutomatInfo(match);
+
+  const cascaded = [];
+
+  // Cascade: Clear dependent matches if their source was just cleared
+  if (match.winnerTo) {
+    const next = matches[match.winnerTo.matchId];
+    if (next && next[match.winnerTo.slot === 1 ? "player1" : "player2"] === wasWinner) {
+      cascaded.push(...clearMatch(matches, next.id));
+    }
+  }
+
+  if (match.loserTo) {
+    const next = matches[match.loserTo.matchId];
+    if (next && next[match.loserTo.slot === 1 ? "player1" : "player2"] === wasWinner) {
+      cascaded.push(...clearMatch(matches, next.id));
+    }
+  }
+
+  return cascaded;
+}
+
+/**
+ * PATCH /tournaments/:id/matches/:matchId (PHASE 2.2 NEW)
+ * Update match result (legs, winner calculation, propagation)
+ */
+app.patch("/tournaments/:id/matches/:matchId", verifyToken, requireWrite, (req, res) => {
+  const { id: tournamentId, matchId } = req.params;
+  const { legs1, legs2, isConfirmed } = req.body || {};
+
+  // Load state
+  const state = readState(tournamentId);
+  if (!state) {
+    return sendError(res, "NOT_FOUND", { reason: "Tournament state not found" });
+  }
+
+  const match = state.matches && state.matches[matchId];
+  if (!match) {
+    return sendError(res, "NOT_FOUND", { reason: "Match not found" });
+  }
+
+  // Validate match is ready
+  if (!match.canBePlayed && !match.winner) {
+    return sendError(res, "INVALID_STATE", { reason: "Match dependencies not met" });
+  }
+
+  // Validate legs
+  if ((legs1 !== undefined || legs2 !== undefined) && (legs1 === null || legs2 === null)) {
+    return sendError(res, "VALIDATION_ERROR", { reason: "Both legs1 and legs2 must be set or null" });
+  }
+
+  const bestOf = state.best_of || 5;
+  const legsToWin = Math.ceil(bestOf / 2);
+
+  // Validate leg values
+  if (legs1 !== undefined || legs2 !== undefined) {
+    const l1 = legs1 || 0;
+    const l2 = legs2 || 0;
+
+    if (l1 < 0 || l2 < 0) {
+      return sendError(res, "VALIDATION_ERROR", { reason: "Legs cannot be negative" });
+    }
+
+    if (l1 === l2) {
+      return sendError(res, "VALIDATION_ERROR", { reason: "Match cannot be a draw" });
+    }
+
+    if (l1 > bestOf || l2 > bestOf) {
+      return sendError(res, "VALIDATION_ERROR", { reason: `Legs cannot exceed best-of ${bestOf}` });
+    }
+
+    const winner = calculateWinner(match, l1, l2, bestOf);
+    if (!winner) {
+      return sendError(res, "VALIDATION_ERROR", { reason: "Invalid legs: no winner determined" });
+    }
+  }
+
+  // Update match
+  const prevWinner = match.winner;
+  if (legs1 !== undefined) match.legs1 = legs1 || null;
+  if (legs2 !== undefined) match.legs2 = legs2 || null;
+
+  if (match.legs1 !== null && match.legs2 !== null) {
+    match.winner = calculateWinner(match, match.legs1, match.legs2, bestOf);
+  } else {
+    match.winner = null;
+  }
+
+  clearAutomatInfo(match);
+
+  // Propagate winner
+  const affectedIds = match.winner
+    ? propagateWinner(state.matches, matchId, match.winner, 
+        match.player1 === match.winner ? match.player2 : match.player1, 
+        prevWinner)
+    : [];
+
+  // Collect affected matches
+  const affectedMatches = affectedIds.reduce((acc, id) => {
+    if (state.matches[id]) acc.push(state.matches[id]);
+    return acc;
+  }, []);
+
+  // Save state
+  try {
+    writeState(tournamentId, state);
+    emitTournamentStateChanged(tournamentId, {
+      updatedMatch: { id: matchId, ...match },
+      affected: {
+        matches: affectedMatches,
+        brackets: []
+      }
+    });
+    res.json({
+      ok: true,
+      match,
+      affected: {
+        matches: affectedMatches,
+        brackets: [] // Array of affected bracket IDs (for optimization)
+      }
+    });
+  } catch (e) {
+    console.error("Failed to update match:", e);
+    return sendError(res, "INTERNAL_ERROR");
+  }
+});
+
+/**
+ * DELETE /tournaments/:id/matches/:matchId (PHASE 2.2 NEW)
+ * Clear/reset match result (undo operation)
+ */
+app.delete("/tournaments/:id/matches/:matchId", verifyToken, requireWrite, (req, res) => {
+  const { id: tournamentId, matchId } = req.params;
+
+  // Load state
+  const state = readState(tournamentId);
+  if (!state) {
+    return sendError(res, "NOT_FOUND", { reason: "Tournament state not found" });
+  }
+
+  const match = state.matches && state.matches[matchId];
+  if (!match) {
+    return sendError(res, "NOT_FOUND", { reason: "Match not found" });
+  }
+
+  // Clear match and cascade
+  const cascaded = clearMatch(state.matches, matchId);
+
+  // Save state
+  try {
+    writeState(tournamentId, state);
+    const cascadedMatches = cascaded.map(id => state.matches[id]).filter(m => m);
+    emitTournamentStateChanged(tournamentId, {
+      updatedMatch: {
+        id: matchId,
+        winner: null,
+        legs1: null,
+        legs2: null
+      },
+      cascaded: cascadedMatches
+    });
+    res.json({
+      ok: true,
+      match: {
+        id: matchId,
+        winner: null,
+        legs1: null,
+        legs2: null
+      },
+      cascaded: cascadedMatches
+    });
+  } catch (e) {
+    console.error("Failed to clear match:", e);
+    return sendError(res, "INTERNAL_ERROR");
+  }
+});
+
+/**
+ * PHASE 2.4: Socket.io WebSocket Connection Handlers
+ */
+const tournamentConnections = {}; // Track active connections per tournament
+
+io.on("connection", (socket) => {
+  console.log(`[Socket] Client ${socket.id} connected`);
+  let authenticatedTournamentId = null;
+
+  // Authenticate via JWT
+  socket.on("authenticate", (data) => {
+    const { token } = data || {};
+    if (!token) {
+      socket.emit("error", { code: "UNAUTHORIZED", message: "Token required" });
+      return;
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      socket.emit("error", { code: "UNAUTHORIZED", message: "Invalid or expired token" });
+      return;
+    }
+
+    const { role, tournamentId: tokenTournamentId } = payload;
+    if (!tokenTournamentId) {
+      socket.emit("error", { code: "FORBIDDEN", message: "No tournament context in token" });
+      return;
+    }
+
+    // Verify tournament exists
+    const meta = readTournamentsMeta();
+    if (!meta[tokenTournamentId]) {
+      socket.emit("error", { code: "NOT_FOUND", message: "Tournament not found" });
+      return;
+    }
+
+    // Store auth context
+    socket.user = { role, tournamentId: tokenTournamentId };
+    authenticatedTournamentId = tokenTournamentId;
+
+    // Join tournament room
+    const roomName = `tournament:${tokenTournamentId}`;
+    socket.join(roomName);
+
+    console.log(`[Socket] Client ${socket.id} authenticated as ${role} for tournament ${tokenTournamentId}`);
+    socket.emit("authenticated", { ok: true, tournamentId: tokenTournamentId, role });
+  });
+
+  // Handle match update (client → server)
+  socket.on("update-match", (data) => {
+    if (!socket.user || !authenticatedTournamentId) {
+      socket.emit("error", { code: "UNAUTHORIZED", message: "Not authenticated" });
+      return;
+    }
+
+    const { matchId, legs1, legs2 } = data || {};
+    if (!matchId) {
+      socket.emit("error", { code: "VALIDATION_ERROR", message: "matchId required" });
+      return;
+    }
+
+    // Load tournament state
+    const state = readState(authenticatedTournamentId);
+    if (!state) {
+      socket.emit("error", { code: "NOT_FOUND", message: "Tournament not found" });
+      return;
+    }
+
+    const match = state.matches && state.matches[matchId];
+    if (!match) {
+      socket.emit("error", { code: "NOT_FOUND", message: "Match not found" });
+      return;
+    }
+
+    // Update match (same logic as POST /state)
+    const bestOf = state.best_of || 5;
+    try {
+      const prevWinner = match.winner;
+      match.legs1 = legs1 !== undefined ? legs1 : match.legs1;
+      match.legs2 = legs2 !== undefined ? legs2 : match.legs2;
+      match.winner = match.legs1 !== null && match.legs2 !== null
+        ? calculateWinner(match, match.legs1, match.legs2, bestOf)
+        : null;
+
+      clearAutomatInfo(match);
+
+      const newLoser = match.winner
+        ? match.player1 === match.winner ? match.player2 : match.player1
+        : null;
+
+      // Propagate winner to dependent matches
+      const affectedIds = match.winner
+        ? propagateWinner(state.matches, matchId, match.winner, newLoser, prevWinner)
+        : [];
+      const affectedMatches = affectedIds.map((id) => state.matches[id]).filter(Boolean);
+
+      // Save state
+      writeState(authenticatedTournamentId, state);
+
+      emitTournamentStateChanged(authenticatedTournamentId, {
+        updatedMatch: { id: matchId, ...match },
+        affected: {
+          matches: affectedMatches,
+          brackets: []
+        }
+      });
+
+      socket.emit("match-updated", { ok: true, matchId, match });
+    } catch (e) {
+      console.error("Failed to update match via WebSocket:", e);
+      socket.emit("error", { code: "INTERNAL_ERROR", message: e.message });
+    }
+  });
+
+  // Handle disconnect
+  socket.on("disconnect", () => {
+    if (authenticatedTournamentId) {
+      console.log(`[Socket] Client ${socket.id} disconnected from tournament ${authenticatedTournamentId}`);
+    } else {
+      console.log(`[Socket] Client ${socket.id} disconnected (unauthenticated)`);
+    }
+  });
 });
 
 // Statische Dateien aus dem build-Ordner ausliefern
@@ -300,6 +845,6 @@ TOURNAMENT_PATHS.forEach((basePath) => {
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`Turnier backend listening on http://localhost:${PORT}`);
+server.listen(PORT, () => {
+  console.log(`[Server] Turnier backend listening on http://localhost:${PORT} (WebSocket ready)`);
 });

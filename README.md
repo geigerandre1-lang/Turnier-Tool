@@ -1,5 +1,38 @@
 # Getting Started with Create React App
 
+## Tournament Backend Notes
+
+This project contains both:
+- the React web app (`npm start`)
+- the tournament backend server (`npm run server`)
+
+For local end-to-end verification of realtime behavior, run:
+
+```bash
+npm run server
+```
+
+In a second terminal:
+
+```bash
+npm run test:realtime-e2e
+```
+
+Expected output from the E2E check includes:
+- `ok: true`
+- `gotPatchEvent: true`
+- `gotDeleteEvent: true`
+
+## Security Note
+
+Default secrets are only acceptable for local development.
+
+Set these environment variables for production:
+- `MASTER_PASSWORD`
+- `JWT_SECRET`
+
+If defaults are still present in production mode, the server exits by design.
+
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
 ## Available Scripts
