@@ -536,6 +536,9 @@ function clearMatch(matches, matchId) {
   if (!match) return [];
 
   const wasWinner = match.winner;
+  const wasLoser = wasWinner
+    ? wasWinner === match.player1 ? match.player2 : match.player1
+    : null;
   match.winner = null;
   match.legs1 = null;
   match.legs2 = null;
@@ -546,15 +549,23 @@ function clearMatch(matches, matchId) {
   // Cascade: Clear dependent matches if their source was just cleared
   if (match.winnerTo) {
     const next = matches[match.winnerTo.matchId];
-    if (next && next[match.winnerTo.slot === 1 ? "player1" : "player2"] === wasWinner) {
-      cascaded.push(...clearMatch(matches, next.id));
+    if (next) {
+      const slotKey = match.winnerTo.slot === 1 ? "player1" : "player2";
+      if (next[slotKey] === wasWinner) {
+        next[slotKey] = null;
+        cascaded.push(...clearMatch(matches, next.id));
+      }
     }
   }
 
   if (match.loserTo) {
     const next = matches[match.loserTo.matchId];
-    if (next && next[match.loserTo.slot === 1 ? "player1" : "player2"] === wasWinner) {
-      cascaded.push(...clearMatch(matches, next.id));
+    if (next) {
+      const slotKey = match.loserTo.slot === 1 ? "player1" : "player2";
+      if (next[slotKey] === wasLoser) {
+        next[slotKey] = null;
+        cascaded.push(...clearMatch(matches, next.id));
+      }
     }
   }
 
