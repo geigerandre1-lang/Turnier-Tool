@@ -559,7 +559,7 @@ function clearMatch(matches, matchId) {
  */
 app.patch("/tournaments/:id/matches/:matchId", verifyToken, requireWrite, (req, res) => {
   const { id: tournamentId, matchId } = req.params;
-  const { legs1, legs2, isConfirmed } = req.body || {};
+  const { legs1, legs2, winner } = req.body || {};
 
   // Load state
   const state = readState(tournamentId);
@@ -577,18 +577,32 @@ app.patch("/tournaments/:id/matches/:matchId", verifyToken, requireWrite, (req, 
     return sendError(res, "INVALID_STATE", { reason: "Match dependencies not met" });
   }
 
-  // Validate legs
-  if ((legs1 !== undefined || legs2 !== undefined) && (legs1 === null || legs2 === null)) {
-    return sendError(res, "VALIDATION_ERROR", { reason: "Both legs1 and legs2 must be set or null" });
+  const hasLegsInput = legs1 !== undefined || legs2 !== undefined;
+  const hasWinnerInput = typeof winner === "string" && winner.trim().length > 0;
+
+  if (!hasLegsInput && !hasWinnerInput) {
+    return sendError(res, "VALIDATION_ERROR", { reason: "Either legs1/legs2 or winner must be provided" });
+  }
+
+  if (hasLegsInput && (legs1 === null || legs2 === null || legs1 === undefined || legs2 === undefined)) {
+    return sendError(res, "VALIDATION_ERROR", { reason: "Both legs1 and legs2 must be provided together" });
+  }
+
+  if (hasWinnerInput && winner !== match.player1 && winner !== match.player2) {
+    return sendError(res, "VALIDATION_ERROR", { reason: "Winner must be one of the players in this match" });
   }
 
   const bestOf = state.best_of || 5;
   const legsToWin = Math.ceil(bestOf / 2);
 
   // Validate leg values
-  if (legs1 !== undefined || legs2 !== undefined) {
-    const l1 = legs1 || 0;
-    const l2 = legs2 || 0;
+  if (hasLegsInput) {
+    const l1 = legs1 ?? 0;
+    const l2 = legs2 ?? 0;
+
+    if (!Number.isInteger(l1) || !Number.isInteger(l2)) {
+      return sendError(res, "VALIDATION_ERROR", { reason: "Legs must be integers" });
+    }
 
     if (l1 < 0 || l2 < 0) {
       return sendError(res, "VALIDATION_ERROR", { reason: "Legs cannot be negative" });
@@ -610,13 +624,14 @@ app.patch("/tournaments/:id/matches/:matchId", verifyToken, requireWrite, (req, 
 
   // Update match
   const prevWinner = match.winner;
-  if (legs1 !== undefined) match.legs1 = legs1 || null;
-  if (legs2 !== undefined) match.legs2 = legs2 || null;
-
-  if (match.legs1 !== null && match.legs2 !== null) {
+  if (hasLegsInput) {
+    match.legs1 = legs1;
+    match.legs2 = legs2;
     match.winner = calculateWinner(match, match.legs1, match.legs2, bestOf);
   } else {
-    match.winner = null;
+    match.legs1 = null;
+    match.legs2 = null;
+    match.winner = winner;
   }
 
   clearAutomatInfo(match);
