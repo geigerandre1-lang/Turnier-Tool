@@ -478,6 +478,14 @@ function clearAutomatInfo(match) {
   match.automatName = undefined;
 }
 
+function isMatchPlayable(match) {
+  if (match && typeof match.canBePlayed === "boolean") {
+    return match.canBePlayed;
+  }
+
+  return Boolean(match && match.player1 && match.player2 && !match.winner);
+}
+
 /**
  * Helper: Propagate winner to next matches
  * Returns array of affected matches
@@ -572,8 +580,8 @@ app.patch("/tournaments/:id/matches/:matchId", verifyToken, requireWrite, (req, 
     return sendError(res, "NOT_FOUND", { reason: "Match not found" });
   }
 
-  // Validate match is ready
-  if (!match.canBePlayed && !match.winner) {
+  // Validate match is ready (fallback for older states without canBePlayed)
+  if (!isMatchPlayable(match) && !match.winner) {
     return sendError(res, "INVALID_STATE", { reason: "Match dependencies not met" });
   }
 
