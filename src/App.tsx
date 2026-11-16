@@ -17,6 +17,11 @@ import { autoAdvanceByes } from "./core/autoAdvanceByes";
 import { DebugPanel } from "./components/DebugPanel";
 import * as XLSX from 'xlsx';
 
+/** Spectator-Polling: seltener als bisher (3s), Pausieren bei Tab im Hintergrund. */
+const SPECTATOR_POLL_MS = 10000;
+/** Operator-Speichern: debounced, damit Automaten-/Match-Updates nicht jeden Tick POSTen. */
+const OPERATOR_SAVE_DEBOUNCE_MS = 1200;
+
 const BACKEND_BASE =
   typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
     ? "http://localhost:4000"
@@ -411,6 +416,10 @@ export default function App() {
     }
   }, [announcementNotificationId]);
 
+  const lastSavedPayloadRef = useRef<string>("");
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressSaveUntilRef = useRef<number>(0);
+
   // Zentralen Turnier-Status vom lokalen Backend laden (falls verfügbar)
   useEffect(() => {
     if (!TOURNAMENT_ID) return; // Root-URL: kein konkretes Turnier laden
@@ -419,7 +428,14 @@ export default function App() {
         const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`);
         if (!res.ok) return;
         const data = await res.json();
+        // Nach Hydration kurz keine Saves auslösen (vermeidet Write-Storm)
+        suppressSaveUntilRef.current = Date.now() + 1500;
         applyBackendState(data);
+        try {
+          lastSavedPayloadRef.current = JSON.stringify(data);
+        } catch {
+          // ignore
+        }
       } catch (e) {
         console.warn("Konnte Turnier-Status vom Backend nicht laden", e);
       }
@@ -428,10 +444,11 @@ export default function App() {
     loadFromServer();
   }, [stateQuery]);
 
-  // Turnier-Status an Backend senden, wenn sich der Kernzustand ändert
+  // Turnier-Status an Backend senden (debounced + dedupe)
   useEffect(() => {
     if (!TOURNAMENT_ID) return; // Root-URL: nichts speichern
     if (!isOperator) return;
+    if (Date.now() < suppressSaveUntilRef.current) return;
 
     const payload = {
       players,
@@ -451,7 +468,19 @@ export default function App() {
       announcementNotificationId,
     };
 
-    const send = async () => {
+    let serialized = "";
+    try {
+      serialized = JSON.stringify(payload);
+    } catch {
+      return;
+    }
+    if (serialized === lastSavedPayloadRef.current) return;
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      if (Date.now() < suppressSaveUntilRef.current) return;
+      if (serialized === lastSavedPayloadRef.current) return;
+
       try {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (authToken) {
@@ -461,23 +490,27 @@ export default function App() {
         const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`, {
           method: "POST",
           headers,
-          body: JSON.stringify(payload),
+          body: serialized,
         });
 
         if (!res.ok) {
           console.warn("Backend hat Status nicht akzeptiert", res.status);
           if (res.status === 401 || res.status === 403) {
-            // Token ist vermutlich abgelaufen oder ungueltig
             setAuthToken(null);
             setIsOperator(false);
           }
+          return;
         }
+
+        lastSavedPayloadRef.current = serialized;
       } catch (e) {
         console.warn("Konnte Turnier-Status nicht ans Backend senden", e);
       }
-    };
+    }, OPERATOR_SAVE_DEBOUNCE_MS);
 
-    send();
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, [
     players,
     matches,
@@ -499,14 +532,17 @@ export default function App() {
     stateQuery,
   ]);
 
-  // Nicht-Operator-Clients: regelmäßig Turnier-Status vom Backend nachladen
+  // Nicht-Operator-Clients: Polling (pausiert im Hintergrund-Tab)
   useEffect(() => {
     if (!TOURNAMENT_ID) return; // Root-URL: kein Polling
     if (isOperator) return;
+    if (typeof document === "undefined") return;
 
     let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
     const pollFromServer = async () => {
+      if (cancelled || document.hidden) return;
       try {
         const res = await fetch(`${BACKEND_BASE}/state${stateQuery}`);
         if (!res.ok) return;
@@ -519,11 +555,30 @@ export default function App() {
       }
     };
 
-    const interval = setInterval(pollFromServer, 3000);
+    const startPolling = () => {
+      if (intervalId != null) return;
+      void pollFromServer();
+      intervalId = setInterval(pollFromServer, SPECTATOR_POLL_MS);
+    };
+
+    const stopPolling = () => {
+      if (intervalId == null) return;
+      clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) stopPolling();
+      else startPolling();
+    };
+
+    if (!document.hidden) startPolling();
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [isOperator, stateQuery]);
 
