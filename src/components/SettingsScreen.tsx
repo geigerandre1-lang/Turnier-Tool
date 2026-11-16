@@ -9,6 +9,7 @@ interface SettingsScreenProps {
   startDouble: () => void;
   startLeague: () => void;
   startGroups: () => void;
+  startKratzer: () => void;
   maxAutomats: number;
   setMaxAutomats: (val: number) => void;
   initialActiveAutomats: number;
@@ -29,6 +30,10 @@ interface SettingsScreenProps {
   setUseLegsInKO: (val: boolean) => void;
   groupSize: number;
   setGroupSize: (val: number) => void;
+  maxKratzer: number;
+  setMaxKratzer: (val: number) => void;
+  kratzerLosersPerGroup: number;
+  setKratzerLosersPerGroup: (val: number) => void;
   onLogout?: () => void;
 }
 
@@ -39,6 +44,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   startDouble,
   startLeague,
   startGroups,
+  startKratzer,
   maxAutomats,
   setMaxAutomats,
   initialActiveAutomats,
@@ -59,6 +65,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   setUseLegsInKO,
   groupSize,
   setGroupSize,
+  maxKratzer,
+  setMaxKratzer,
+  kratzerLosersPerGroup,
+  setKratzerLosersPerGroup,
   onLogout,
 }) => {
   const [newName, setNewName] = useState("");
@@ -167,6 +177,19 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
       {/* Spieler-Liste */}
       <div style={{ marginBottom: "1.5rem" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            marginBottom: 6,
+            color: "#888",
+            fontSize: 12,
+          }}
+        >
+          <span style={{ flex: 1 }}>Name</span>
+          <span style={{ width: 72, textAlign: "center" }}>Start-Kratzer</span>
+          <span style={{ width: 42 }} />
+        </div>
         {players.map((p) => {
           const duplicate = hasDuplicate(p.name, p.id);
           return (
@@ -193,6 +216,33 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   fontSize: 14,
                 }}
               />
+              <input
+                type="number"
+                min={0}
+                max={2}
+                value={p.startKratzer ?? 0}
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  const clamped = Math.min(2, Math.max(0, Number.isFinite(raw) ? raw : 0));
+                  setPlayers(
+                    players.map((x) =>
+                      x.id === p.id ? { ...x, startKratzer: clamped } : x
+                    )
+                  );
+                }}
+                title="Start-Kratzer (Handicap 0–2)"
+                style={{
+                  width: 72,
+                  padding: "0.5rem",
+                  borderRadius: 8,
+                  border: "1px solid #444",
+                  backgroundColor: "#2a2a2a",
+                  color: "#eee",
+                  outline: "none",
+                  fontSize: 14,
+                  textAlign: "center",
+                }}
+              />
               <button
                 onClick={() => removePlayer(p.id)}
                 style={{
@@ -203,6 +253,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   padding: "0.4rem 0.6rem",
                   cursor: "pointer",
                   fontWeight: "bold",
+                  width: 42,
                 }}
               >
                 🗑️
@@ -288,6 +339,62 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           />
         </label>
       </div>
+
+      {/* Kratzer-Einstellungen */}
+      <h2 style={{ textAlign: "center", marginBottom: 10 }}>Kratzerturnier</h2>
+      <div style={{ display: "flex", gap: 16, marginBottom: 8, flexWrap: "wrap" }}>
+        <label style={{ flex: 1, minWidth: 140 }}>
+          Max-Kratzer:
+          <input
+            type="number"
+            min={2}
+            max={10}
+            value={maxKratzer}
+            onChange={(e) => {
+              const val = Number(e.target.value) || 4;
+              setMaxKratzer(Math.min(10, Math.max(2, val)));
+            }}
+            style={{
+              marginLeft: 8,
+              width: 60,
+              borderRadius: 6,
+              border: "1px solid #444",
+              backgroundColor: "#2a2a2a",
+              color: "#eee",
+              padding: "0.25rem 0.5rem",
+              outline: "none",
+            }}
+          />
+        </label>
+        <label style={{ flex: 1, minWidth: 140 }}>
+          Verlierer/Gruppe:
+          <select
+            value={kratzerLosersPerGroup}
+            onChange={(e) => setKratzerLosersPerGroup(Number(e.target.value))}
+            style={{
+              marginLeft: 8,
+              borderRadius: 6,
+              border: "1px solid #444",
+              backgroundColor: "#2a2a2a",
+              color: "#eee",
+              padding: "0.25rem 0.5rem",
+              outline: "none",
+            }}
+          >
+            {[1, 2, 3].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <small style={{ display: "block", color: "#bbb", marginBottom: 16 }}>
+        Gruppengröße kommt aus dem Feld oben (3–6 empfohlen). Ab unter 12 Spielern
+        automatisch kleinere Gruppen und 1 Verlierer. Start-Kratzer pro Spieler: 0–2.
+        Leben-Anzeige bei Max 4: 3/3 (grün) → 2/3 → 1/3 (orange) → Schwimmt (blau) →
+        Ausgeschieden (rot).
+      </small>
 
       {/* Punkteschlüssel + Export/Import */}
       <div style={{ marginBottom: 16 }}>
@@ -482,12 +589,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       </div>
 
       {/* Start Buttons */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
         <button
           onClick={startSingle}
           disabled={!canStart}
           style={{
-            flex: 1,
+            flex: "1 1 140px",
             padding: "0.5rem 1rem",
             borderRadius: 8,
             backgroundColor: canStart ? "#2196F3" : "#555",
@@ -503,7 +610,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           onClick={startDouble}
           disabled={!canStart}
           style={{
-            flex: 1,
+            flex: "1 1 140px",
             padding: "0.5rem 1rem",
             borderRadius: 8,
             backgroundColor: canStart ? "#FF9800" : "#555",
@@ -519,7 +626,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           onClick={startLeague}
           disabled={!canStart}
           style={{
-            flex: 1,
+            flex: "1 1 140px",
             padding: "0.5rem 1rem",
             borderRadius: 8,
             backgroundColor: canStart ? "#9C27B0" : "#555",
@@ -535,7 +642,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           onClick={startGroups}
           disabled={!canStart}
           style={{
-            flex: 1,
+            flex: "1 1 140px",
             padding: "0.5rem 1rem",
             borderRadius: 8,
             backgroundColor: canStart ? "#00BCD4" : "#555",
@@ -546,6 +653,22 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           }}
         >
           Gruppenmodus starten
+        </button>
+        <button
+          onClick={startKratzer}
+          disabled={!canStart}
+          style={{
+            flex: "1 1 140px",
+            padding: "0.5rem 1rem",
+            borderRadius: 8,
+            backgroundColor: canStart ? "#8BC34A" : "#555",
+            color: "#fff",
+            border: "none",
+            cursor: canStart ? "pointer" : "not-allowed",
+            fontWeight: "bold",
+          }}
+        >
+          Kratzer starten
         </button>
       </div>
 

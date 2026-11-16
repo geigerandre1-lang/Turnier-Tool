@@ -2,6 +2,7 @@
   "name": "turnier-tool",
   "version": "0.1.0",
   "private": true,
+  "main": "server.js",
   "dependencies": {
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
@@ -24,12 +25,17 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "start": "node server.js",
+    "start:client": "react-scripts start",
     "server": "node server.js",
     "test:realtime-e2e": "node scripts/realtime-e2e-check.js",
     "build": "react-scripts build",
+    "heroku-postbuild": "npm run build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "eslintConfig": {
     "extends": [

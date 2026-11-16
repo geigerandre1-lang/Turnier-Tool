@@ -3,6 +3,8 @@
 export interface Player {
   id: string;
   name: string;
+  /** Start-Kratzer für Handicap im Kratzer-Modus (0–max-1). */
+  startKratzer?: number;
 }
 
 export interface Automat {
@@ -36,6 +38,11 @@ export interface MatchNode {
   // Optional für Ligamodus (Leg-Ergebnisse)
   legs1?: number | null;
   legs2?: number | null;
+
+  // Kratzer-Modus: N-Spieler-Gruppe mit Platzierung
+  groupPlayers?: string[];
+  placements?: Record<string, number>;
+  losersCount?: number;
 }
 
 // Für DoubleKO-Komponenten

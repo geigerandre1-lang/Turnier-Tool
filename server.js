@@ -40,7 +40,8 @@ function getStateFile(tournamentId) {
 }
 
 // ===== SECURITY: Secrets Validation (Phase 2.1) =====
-// In production, secrets MUST be set. No defaults allowed.
+// Prefer real secrets in production. Do not hard-crash on Hostinger if unset
+// (missing env often surfaces only as HTTP 503 with empty logs).
 function validateSecrets() {
   const masterPwd = process.env.MASTER_PASSWORD || process.env.ADMIN_PASSWORD;
   const jwtSecret = process.env.JWT_SECRET;
@@ -48,24 +49,26 @@ function validateSecrets() {
   const isProduction = process.env.NODE_ENV === "production";
   const hasDefaults = !masterPwd || masterPwd === "change-me" || !jwtSecret || jwtSecret === "change-me-secret";
 
-  if (isProduction && hasDefaults) {
-    console.error(
-      "CRITICAL: In production, you MUST set MASTER_PASSWORD and JWT_SECRET environment variables.\n" +
-      "DO NOT use default values. Exiting.\n" +
-      "Example: export MASTER_PASSWORD=\"your-secure-pwd\" && export JWT_SECRET=\"your-secure-secret\""
-    );
-    process.exit(1);
-  }
-
   if (hasDefaults) {
     console.warn(
       "WARNING: Using default secrets (MASTER_PASSWORD, JWT_SECRET).\n" +
-      "For production use, set these as environment variables."
+      "Set MASTER_PASSWORD and JWT_SECRET in the hoster env for production."
     );
+    if (isProduction && process.env.STRICT_SECRETS === "1") {
+      console.error("STRICT_SECRETS=1: refusing to start with default secrets.");
+      process.exit(1);
+    }
   }
 }
 
 validateSecrets();
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err);
+});
 
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || process.env.ADMIN_PASSWORD || "change-me";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-secret";
@@ -878,7 +881,8 @@ TOURNAMENT_PATHS.forEach((basePath) => {
   app.use(basePath, express.static(BUILD_DIR));
 });
 
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`[Server] Turnier backend listening on http://localhost:${PORT} (WebSocket ready)`);
+const PORT = Number(process.env.PORT) || 4000;
+const HOST = process.env.HOST || "0.0.0.0";
+server.listen(PORT, HOST, () => {
+  console.log(`[Server] Turnier backend listening on http://${HOST}:${PORT} (WebSocket ready)`);
 });

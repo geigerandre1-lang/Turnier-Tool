@@ -19,7 +19,7 @@ interface ManagementScreenProps {
   exportTournament: () => void;
   importTournament: (data: any) => void;
   onClose: () => void;
-  mode?: "ko" | "league" | "groups";
+  mode?: "ko" | "league" | "groups" | "kratzer";
   matches?: Record<string, MatchNode>;
   bestOf?: number;
   onOpenResultModal?: (matchId: string) => void;

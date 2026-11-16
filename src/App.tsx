@@ -14,8 +14,24 @@ import type { MatchTimerState } from "./core/matchTimer";
 import { buildTournament } from "./core/buildTournament";
 import { setWinner, clearMatch } from "./core/matchEngine";
 import { autoAdvanceByes } from "./core/autoAdvanceByes";
+import {
+  DEFAULT_KRATZER_SETTINGS,
+  applyGroupResult,
+  buildKratzerRound,
+  completeKratzerMatch,
+  getActivePlayers,
+  getDisplayLifeTotal,
+  getKratzerWinner,
+  getLifeDisplay,
+  initializeKratzerLives,
+  validatePlacements,
+  type KratzerLives,
+} from "./core/kratzer";
 import { DebugPanel } from "./components/DebugPanel";
+import { KratzerScreen } from "./components/KratzerScreen";
 import * as XLSX from 'xlsx';
+
+type TournamentMode = "ko" | "league" | "groups" | "kratzer";
 
 const BACKEND_BASE =
   typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
@@ -55,9 +71,11 @@ export default function App() {
     return stored ? JSON.parse(stored) : false;
   });
 
-  const [mode, setMode] = useState<"ko" | "league" | "groups">(() => {
+  const [mode, setMode] = useState<TournamentMode>(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("mode")) : null;
-    return stored === "league" || stored === "groups" ? (stored as any) : "ko";
+    return stored === "league" || stored === "groups" || stored === "kratzer"
+      ? (stored as TournamentMode)
+      : "ko";
   });
 
   const [matches, setMatches] = useState<Record<string, MatchNode>>(() => {
@@ -141,6 +159,45 @@ export default function App() {
     return isNaN(val) ? 4 : Math.max(2, val);
   });
 
+  const [maxKratzer, setMaxKratzer] = useState<number>(() => {
+    const stored = typeof window !== "undefined" ? localStorage.getItem(storageKey("maxKratzer")) : null;
+    const val = stored ? parseInt(stored, 10) : DEFAULT_KRATZER_SETTINGS.maxKratzer;
+    return isNaN(val) ? DEFAULT_KRATZER_SETTINGS.maxKratzer : Math.max(2, val);
+  });
+
+  const [kratzerLosersPerGroup, setKratzerLosersPerGroup] = useState<number>(() => {
+    const stored =
+      typeof window !== "undefined"
+        ? localStorage.getItem(storageKey("kratzerLosersPerGroup"))
+        : null;
+    const val = stored ? parseInt(stored, 10) : DEFAULT_KRATZER_SETTINGS.losersPerGroup;
+    return isNaN(val) ? DEFAULT_KRATZER_SETTINGS.losersPerGroup : Math.min(3, Math.max(1, val));
+  });
+
+  const [kratzerLives, setKratzerLives] = useState<KratzerLives>(() => {
+    const stored =
+      typeof window !== "undefined" ? localStorage.getItem(storageKey("kratzerLives")) : null;
+    return stored ? JSON.parse(stored) : {};
+  });
+
+  const [kratzerRound, setKratzerRound] = useState<number>(() => {
+    const stored =
+      typeof window !== "undefined" ? localStorage.getItem(storageKey("kratzerRound")) : null;
+    const val = stored ? parseInt(stored, 10) : 0;
+    return isNaN(val) ? 0 : val;
+  });
+
+  const [kratzerWinner, setKratzerWinner] = useState<string | null>(() => {
+    const stored =
+      typeof window !== "undefined" ? localStorage.getItem(storageKey("kratzerWinner")) : null;
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return stored;
+    }
+  });
+
   const [spectatorOnly] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -156,7 +213,7 @@ export default function App() {
     | null
     | {
         matches: Record<string, MatchNode>;
-        mode: "ko" | "league" | "groups";
+        mode: TournamentMode;
         isDoubleKO: boolean;
         useLegsInKO: boolean;
       }
@@ -166,6 +223,8 @@ export default function App() {
   const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
   const [tempLegs1, setTempLegs1] = useState<number | "">("");
   const [tempLegs2, setTempLegs2] = useState<number | "">("");
+  const [tempPlacements, setTempPlacements] = useState<Record<string, number | "">>({});
+  const [placementError, setPlacementError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -223,10 +282,25 @@ export default function App() {
     if (data.pointScheme) setPointScheme(data.pointScheme);
     if (typeof data.isDoubleKO === "boolean") setIsDoubleKO(data.isDoubleKO);
     if (typeof data.isStarted === "boolean") setIsStarted(data.isStarted);
-    if (data.mode === "league" || data.mode === "ko" || data.mode === "groups") setMode(data.mode);
+    if (
+      data.mode === "league" ||
+      data.mode === "ko" ||
+      data.mode === "groups" ||
+      data.mode === "kratzer"
+    ) {
+      setMode(data.mode);
+    }
     if (typeof data.bestOf === "number") setBestOf(data.bestOf);
     if (typeof data.useLegsInKO === "boolean") setUseLegsInKO(data.useLegsInKO);
     if (typeof data.groupSize === "number") setGroupSize(data.groupSize);
+    if (typeof data.maxKratzer === "number") setMaxKratzer(data.maxKratzer);
+    if (typeof data.kratzerLosersPerGroup === "number")
+      setKratzerLosersPerGroup(data.kratzerLosersPerGroup);
+    if (data.kratzerLives && typeof data.kratzerLives === "object")
+      setKratzerLives(data.kratzerLives);
+    if (typeof data.kratzerRound === "number") setKratzerRound(data.kratzerRound);
+    if (typeof data.kratzerWinner === "string" || data.kratzerWinner === null)
+      setKratzerWinner(data.kratzerWinner);
     if (data.preKOState) setPreKOState(data.preKOState);
     if (typeof data.publicAnnouncement === "string")
       setPublicAnnouncement(data.publicAnnouncement);
@@ -327,6 +401,26 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(storageKey("groupSize"), groupSize.toString());
   }, [groupSize]);
+
+  useEffect(() => {
+    localStorage.setItem(storageKey("maxKratzer"), maxKratzer.toString());
+  }, [maxKratzer]);
+
+  useEffect(() => {
+    localStorage.setItem(storageKey("kratzerLosersPerGroup"), kratzerLosersPerGroup.toString());
+  }, [kratzerLosersPerGroup]);
+
+  useEffect(() => {
+    localStorage.setItem(storageKey("kratzerLives"), JSON.stringify(kratzerLives));
+  }, [kratzerLives]);
+
+  useEffect(() => {
+    localStorage.setItem(storageKey("kratzerRound"), kratzerRound.toString());
+  }, [kratzerRound]);
+
+  useEffect(() => {
+    localStorage.setItem(storageKey("kratzerWinner"), JSON.stringify(kratzerWinner));
+  }, [kratzerWinner]);
 
   // Persist Automats
   useEffect(() => {
@@ -446,6 +540,11 @@ export default function App() {
       bestOf,
       useLegsInKO,
       groupSize,
+      maxKratzer,
+      kratzerLosersPerGroup,
+      kratzerLives,
+      kratzerRound,
+      kratzerWinner,
       preKOState,
       publicAnnouncement,
       announcementNotificationId,
@@ -491,6 +590,11 @@ export default function App() {
     bestOf,
     useLegsInKO,
     groupSize,
+    maxKratzer,
+    kratzerLosersPerGroup,
+    kratzerLives,
+    kratzerRound,
+    kratzerWinner,
     preKOState,
     publicAnnouncement,
     announcementNotificationId,
@@ -572,6 +676,23 @@ export default function App() {
 
   const playerViewName = playerViewSelectedPlayer?.name ?? null;
 
+  const matchIncludesPlayer = (m: MatchNode, name: string) => {
+    if (m.groupPlayers && m.groupPlayers.length > 0) {
+      return m.groupPlayers.includes(name);
+    }
+    return m.player1 === name || m.player2 === name;
+  };
+
+  const opponentsLabel = (m: MatchNode, name: string) => {
+    if (m.groupPlayers && m.groupPlayers.length > 0) {
+      const others = m.groupPlayers.filter((p) => p !== name);
+      return others.length ? others.join(", ") : null;
+    }
+    if (m.player1 === name) return m.player2;
+    if (m.player2 === name) return m.player1;
+    return null;
+  };
+
   const { playerCurrentMatch, playerQueuedMatch } = useMemo(() => {
     if (!playerViewName) {
       return { playerCurrentMatch: null as MatchNode | null, playerQueuedMatch: null as MatchNode | null };
@@ -581,7 +702,7 @@ export default function App() {
     let queued: MatchNode | null = null;
 
     Object.values(matches).forEach((m) => {
-      if (m.player1 !== playerViewName && m.player2 !== playerViewName) return;
+      if (!matchIncludesPlayer(m, playerViewName)) return;
       if (m.winner) return;
 
       if (m.isOnAutomat) {
@@ -604,16 +725,12 @@ export default function App() {
 
   const playerOpponentName = useMemo(() => {
     if (!playerViewName || !playerCurrentMatch) return null;
-    if (playerCurrentMatch.player1 === playerViewName) return playerCurrentMatch.player2;
-    if (playerCurrentMatch.player2 === playerViewName) return playerCurrentMatch.player1;
-    return null;
+    return opponentsLabel(playerCurrentMatch, playerViewName);
   }, [playerCurrentMatch, playerViewName]);
 
   const playerQueuedOpponentName = useMemo(() => {
     if (!playerViewName || !playerQueuedMatch) return null;
-    if (playerQueuedMatch.player1 === playerViewName) return playerQueuedMatch.player2;
-    if (playerQueuedMatch.player2 === playerViewName) return playerQueuedMatch.player1;
-    return null;
+    return opponentsLabel(playerQueuedMatch, playerViewName);
   }, [playerQueuedMatch, playerViewName]);
 
   const playerPrevStatusRef = useRef<"idle" | "queued" | "current">("idle");
@@ -745,6 +862,54 @@ export default function App() {
     setIsStarted(true);
   };
 
+  const getKratzerSettings = () => ({
+    maxKratzer,
+    preferredGroupSize: Math.min(6, Math.max(3, groupSize)),
+    losersPerGroup: kratzerLosersPerGroup,
+    autoShrinkBelow: DEFAULT_KRATZER_SETTINGS.autoShrinkBelow,
+  });
+
+  const startKratzer = () => {
+    setPreKOState(null);
+    setMode("kratzer");
+    setIsDoubleKO(false);
+    setUseLegsInKO(false);
+    setKratzerWinner(null);
+    setMatchTimers({});
+    setAutomats((prev) => prev.map((a) => ({ ...a, currentMatch: undefined })));
+
+    const settings = {
+      maxKratzer,
+      preferredGroupSize: Math.min(6, Math.max(3, groupSize)),
+      losersPerGroup: kratzerLosersPerGroup,
+      autoShrinkBelow: DEFAULT_KRATZER_SETTINGS.autoShrinkBelow,
+    };
+    const lives = initializeKratzerLives(players, settings.maxKratzer);
+    const active = getActivePlayers(lives, settings.maxKratzer);
+    const { matches: built } = buildKratzerRound(active, 1, settings);
+    setKratzerLives(lives);
+    setKratzerRound(1);
+    setMatches(built);
+    setIsStarted(true);
+  };
+
+  const advanceKratzerRound = () => {
+    if (mode !== "kratzer" || kratzerWinner) return;
+    const settings = getKratzerSettings();
+    const active = getActivePlayers(kratzerLives, settings.maxKratzer);
+    if (active.length <= 1) {
+      setKratzerWinner(active[0] ?? null);
+      return;
+    }
+
+    const nextRound = kratzerRound + 1;
+    const { matches: built } = buildKratzerRound(active, nextRound, settings);
+    setAutomats((prev) => prev.map((a) => ({ ...a, currentMatch: undefined })));
+    setMatchTimers({});
+    setKratzerRound(nextRound);
+    setMatches(built);
+  };
+
   const startKOFromGroups = (qualifiers: string[], isDouble: boolean) => {
     if (!qualifiers || qualifiers.length < 2) return;
 
@@ -789,7 +954,7 @@ export default function App() {
   };
 
   // Tournament bauen (nur, wenn gestartet)
-// Tournament / Liga / Gruppen bauen
+// Tournament / Liga / Gruppen / Kratzer bauen
 useEffect(() => {
   if (!isStarted) return;
 
@@ -800,6 +965,18 @@ useEffect(() => {
       setMatches({ ...built });
     } else if (mode === "groups") {
       const built = buildRoundRobinGroups(players, groupSize);
+      setMatches({ ...built });
+    } else if (mode === "kratzer") {
+      const settings = getKratzerSettings();
+      const lives =
+        Object.keys(kratzerLives).length > 0
+          ? kratzerLives
+          : initializeKratzerLives(players, settings.maxKratzer);
+      if (Object.keys(kratzerLives).length === 0) setKratzerLives(lives);
+      const active = getActivePlayers(lives, settings.maxKratzer);
+      const round = kratzerRound > 0 ? kratzerRound : 1;
+      if (kratzerRound <= 0) setKratzerRound(1);
+      const { matches: built } = buildKratzerRound(active, round, settings);
       setMatches({ ...built });
     } else {
       const names = players.map((p) => p.name);
@@ -893,10 +1070,24 @@ const importTournament = (data: any) => {
   if (data.pointScheme) setPointScheme(data.pointScheme);
   if (typeof data.isDoubleKO === "boolean") setIsDoubleKO(data.isDoubleKO);
   if (typeof data.isStarted === "boolean") setIsStarted(data.isStarted);
-  if (data.mode === "league" || data.mode === "ko" || data.mode === "groups") setMode(data.mode);
+  if (
+    data.mode === "league" ||
+    data.mode === "ko" ||
+    data.mode === "groups" ||
+    data.mode === "kratzer"
+  ) {
+    setMode(data.mode);
+  }
   if (typeof data.bestOf === "number") setBestOf(data.bestOf);
   if (typeof data.useLegsInKO === "boolean") setUseLegsInKO(data.useLegsInKO);
   if (typeof data.groupSize === "number") setGroupSize(data.groupSize);
+  if (typeof data.maxKratzer === "number") setMaxKratzer(data.maxKratzer);
+  if (typeof data.kratzerLosersPerGroup === "number")
+    setKratzerLosersPerGroup(data.kratzerLosersPerGroup);
+  if (data.kratzerLives && typeof data.kratzerLives === "object") setKratzerLives(data.kratzerLives);
+  if (typeof data.kratzerRound === "number") setKratzerRound(data.kratzerRound);
+  if (typeof data.kratzerWinner === "string" || data.kratzerWinner === null)
+    setKratzerWinner(data.kratzerWinner);
   if (typeof data.publicAnnouncement === "string") setPublicAnnouncement(data.publicAnnouncement);
   if (typeof data.announcementNotificationId === "number")
     setAnnouncementNotificationId(data.announcementNotificationId);
@@ -916,6 +1107,11 @@ const exportTournament = () => {
     bestOf,
     useLegsInKO,
     groupSize,
+    maxKratzer,
+    kratzerLosersPerGroup,
+    kratzerLives,
+    kratzerRound,
+    kratzerWinner,
     publicAnnouncement,
     announcementNotificationId,
   };
@@ -961,6 +1157,9 @@ const exportTournament = () => {
     setPreKOState(null);
     setMatches({});
     setMatchTimers({});
+    setKratzerLives({});
+    setKratzerRound(0);
+    setKratzerWinner(null);
     setIsStarted(false);
   };
 
@@ -970,6 +1169,9 @@ const exportTournament = () => {
     setPlayers([]);
     setMatches({});
     setMatchTimers({});
+    setKratzerLives({});
+    setKratzerRound(0);
+    setKratzerWinner(null);
     setIsStarted(false);
     setMode("ko");
   };
@@ -1016,9 +1218,65 @@ const exportTournament = () => {
     return true;
   })();
 
+  const canConfirmKratzerResult = (() => {
+    if (!editingMatch || mode !== "kratzer") return false;
+    const group = editingMatch.groupPlayers ?? [];
+    if (group.length < 2) return false;
+    const placements: Record<string, number> = {};
+    for (const name of group) {
+      const raw = tempPlacements[name];
+      if (raw === "" || raw == null || Number.isNaN(Number(raw))) return false;
+      placements[name] = Number(raw);
+    }
+    return validatePlacements(group, placements) == null;
+  })();
+
+  const calculateKratzerStandings = () => {
+    const total = getDisplayLifeTotal(maxKratzer);
+    return [...players]
+      .map((p) => {
+        const k = kratzerLives[p.name] ?? 0;
+        const display = getLifeDisplay(k, maxKratzer);
+        return {
+          id: p.id,
+          name: `${p.name} (${display.label})`,
+          // Punkte-Spalte: verbleibende Leben (0 bei Schwimmt/Ausgeschieden)
+          points: display.remaining,
+          wins: display.remaining,
+          losses: k,
+          legsFor: display.remaining,
+          legsAgainst: total,
+          legDiff: display.remaining,
+          _kratzer: k,
+          _eliminated: display.status === "eliminated",
+        };
+      })
+      .sort((a, b) => {
+        if (a._eliminated !== b._eliminated) return a._eliminated ? 1 : -1;
+        if (a._kratzer !== b._kratzer) return a._kratzer - b._kratzer;
+        return a.name.localeCompare(b.name);
+      })
+      .map(({ _kratzer, _eliminated, ...row }) => row);
+  };
+
   const openResultModal = (matchId: string) => {
     const m = matches[matchId];
-    if (!m || !m.player1 || !m.player2) return;
+    if (!m) return;
+
+    if (mode === "kratzer") {
+      const group = m.groupPlayers ?? [];
+      if (group.length < 2) return;
+      const initial: Record<string, number | ""> = {};
+      group.forEach((name) => {
+        initial[name] = m.placements?.[name] ?? "";
+      });
+      setTempPlacements(initial);
+      setPlacementError(null);
+      setEditingMatchId(matchId);
+      return;
+    }
+
+    if (!m.player1 || !m.player2) return;
     setEditingMatchId(matchId);
     setTempLegs1(m.legs1 ?? "");
     setTempLegs2(m.legs2 ?? "");
@@ -1028,6 +1286,50 @@ const exportTournament = () => {
     setEditingMatchId(null);
     setTempLegs1("");
     setTempLegs2("");
+    setTempPlacements({});
+    setPlacementError(null);
+  };
+
+  const confirmKratzerResult = () => {
+    if (!editingMatchId || !editingMatch) return;
+    const group = editingMatch.groupPlayers ?? [];
+    const placements: Record<string, number> = {};
+    group.forEach((name) => {
+      const raw = tempPlacements[name];
+      if (raw !== "" && raw != null) placements[name] = Number(raw);
+    });
+
+    const error = validatePlacements(group, placements);
+    if (error) {
+      setPlacementError(error);
+      return;
+    }
+
+    const losersCount = editingMatch.losersCount ?? 1;
+    const applied = applyGroupResult(
+      kratzerLives,
+      group,
+      placements,
+      losersCount,
+      maxKratzer
+    );
+
+    setKratzerLives(applied.lives);
+    setMatches((prev) => {
+      const copy = { ...prev };
+      copy[editingMatchId] = completeKratzerMatch(copy[editingMatchId], placements);
+      return copy;
+    });
+    setAutomats((prev) =>
+      prev.map((a) =>
+        a.currentMatch === editingMatchId ? { ...a, currentMatch: undefined } : a
+      )
+    );
+
+    const winner = getKratzerWinner(applied.lives, maxKratzer);
+    if (winner) setKratzerWinner(winner);
+
+    closeResultModal();
   };
 
   const confirmResult = () => {
@@ -1487,6 +1789,7 @@ const exportTournament = () => {
           startDouble={startDouble}
           startLeague={startLeague}
           startGroups={startGroups}
+          startKratzer={startKratzer}
           maxAutomats={maxAutomats}
           setMaxAutomats={setMaxAutomats}
           initialActiveAutomats={initialActiveAutomats}
@@ -1507,6 +1810,10 @@ const exportTournament = () => {
           setUseLegsInKO={setUseLegsInKO}
           groupSize={groupSize}
           setGroupSize={setGroupSize}
+          maxKratzer={maxKratzer}
+          setMaxKratzer={setMaxKratzer}
+          kratzerLosersPerGroup={kratzerLosersPerGroup}
+          setKratzerLosersPerGroup={setKratzerLosersPerGroup}
           onLogout={handleLogout}
         />
       </>
@@ -1623,10 +1930,12 @@ const exportTournament = () => {
             standings={
               mode === "league" || mode === "groups"
                 ? calculateLeagueStandings()
+                : mode === "kratzer"
+                ? calculateKratzerStandings()
                 : calculateStandings()
             }
             isDoubleKO={isDoubleKO}
-            mode={mode}
+            mode={mode === "kratzer" ? "groups" : mode}
             pointScheme={pointScheme}
             groupPhaseMatches={preKOState?.matches}
             publicAnnouncement={publicAnnouncement}
@@ -1674,7 +1983,7 @@ const exportTournament = () => {
             cursor: "pointer",
           }}
         >
-          Bracket-Ansicht
+          {mode === "kratzer" ? "Kratzer-Ansicht" : "Bracket-Ansicht"}
         </button>
         <button
           onClick={() => {
@@ -1785,6 +2094,8 @@ const exportTournament = () => {
             standings={
               mode === "league" || mode === "groups"
                 ? calculateLeagueStandings()
+                : mode === "kratzer"
+                ? calculateKratzerStandings()
                 : calculateStandings()
             }
           pointScheme={pointScheme}
@@ -1834,7 +2145,7 @@ const exportTournament = () => {
           matchTimerMinutes={matchTimerMinutes}
           setMatchTimerMinutes={setMatchTimerMinutes}
             onOpenResultModal={
-            mode === "league" || mode === "groups" || useLegsInKO
+            mode === "league" || mode === "groups" || mode === "kratzer" || useLegsInKO
               ? openResultModal
               : undefined
             }
@@ -1852,10 +2163,12 @@ const exportTournament = () => {
           standings={
             mode === "league" || mode === "groups"
               ? calculateLeagueStandings()
+              : mode === "kratzer"
+              ? calculateKratzerStandings()
               : calculateStandings()
           }
           isDoubleKO={isDoubleKO}
-          mode={mode}
+          mode={mode === "kratzer" ? "groups" : mode}
           pointScheme={pointScheme}
           groupPhaseMatches={preKOState?.matches}
           publicAnnouncement={publicAnnouncement}
@@ -1868,11 +2181,13 @@ const exportTournament = () => {
           standings={
             mode === "league" || mode === "groups"
               ? calculateLeagueStandings()
+              : mode === "kratzer"
+              ? calculateKratzerStandings()
               : calculateStandings()
           }
           matchTimers={matchTimers}
           matchTimerMinutes={matchTimerMinutes}
-          mode={mode}
+          mode={mode === "kratzer" ? "groups" : mode}
         />
       </div>
       <div
@@ -1891,22 +2206,34 @@ const exportTournament = () => {
             background: "#111",
           }}
         >
-          {/** Popup für Liga oder KO mit Legs-Einstellung */}
-          <Bracket
-            matches={matches}
-            isDoubleKO={isDoubleKO}
-            onSelectWinner={mode === "ko" && !useLegsInKO ? handleSelectWinner : undefined}
-            onUndo={handleUndo}
-            matchTimers={matchTimers}
-            matchTimerMinutes={matchTimerMinutes}
-            showTimers={timersEnabled}
-            onMatchClick={
-              mode === "league" || mode === "groups" || useLegsInKO
-                ? openResultModal
-                : undefined
-            }
-            mode={mode}
-          />
+          {mode === "kratzer" ? (
+            <KratzerScreen
+              players={players}
+              matches={matches}
+              lives={kratzerLives}
+              settings={getKratzerSettings()}
+              currentRound={kratzerRound}
+              tournamentWinner={kratzerWinner}
+              onOpenResultModal={openResultModal}
+              onAdvanceRound={advanceKratzerRound}
+            />
+          ) : (
+            <Bracket
+              matches={matches}
+              isDoubleKO={isDoubleKO}
+              onSelectWinner={mode === "ko" && !useLegsInKO ? handleSelectWinner : undefined}
+              onUndo={handleUndo}
+              matchTimers={matchTimers}
+              matchTimerMinutes={matchTimerMinutes}
+              showTimers={timersEnabled}
+              onMatchClick={
+                mode === "league" || mode === "groups" || useLegsInKO
+                  ? openResultModal
+                  : undefined
+              }
+              mode={mode}
+            />
+          )}
         </div>
       </div>
 
@@ -1937,66 +2264,116 @@ const exportTournament = () => {
             }}
           >
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>
-              Matchergebnis eintragen – {editingMatch.id}
+              {mode === "kratzer" ? "Platzierung eintragen" : "Matchergebnis eintragen"} –{" "}
+              {editingMatch.id}
               {typeof editingMatch.round === "number"
-                ? ` (Runde ${editingMatch.round + 1})`
+                ? ` (Runde ${editingMatch.round})`
                 : ""}
             </h3>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ marginBottom: 8 }}>Ergebnis (Best of {effectiveBestOf}):</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ flex: 1, textAlign: "right" }}>{editingMatch.player1}</div>
-                <select
-                  value={tempLegs1 === "" ? "" : String(tempLegs1)}
-                  onChange={(e) => {
-                    const v = e.target.value === "" ? "" : Number(e.target.value);
-                    setTempLegs1(v as any);
-                  }}
-                  style={{
-                    padding: "0.3rem 0.5rem",
-                    borderRadius: 6,
-                    border: "1px solid #555",
-                    background: "#111",
-                    color: "#fff",
-                  }}
-                >
-                  <option value="">-</option>
-                  {legOptions.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
+            {mode === "kratzer" ? (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 8, color: "#bbb", fontSize: 13 }}>
+                  Platz direkt hinter jedem Spieler eintragen (1 = Sieger). Die letzten{" "}
+                  {editingMatch.losersCount ?? 1} Plätze erhalten einen Kratzer.
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {(editingMatch.groupPlayers ?? []).map((name) => (
+                    <div
+                      key={name}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{name}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={(editingMatch.groupPlayers ?? []).length}
+                        value={tempPlacements[name] ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value === "" ? "" : Number(e.target.value);
+                          setTempPlacements((prev) => ({ ...prev, [name]: v }));
+                          setPlacementError(null);
+                        }}
+                        style={{
+                          width: 64,
+                          padding: "0.35rem 0.5rem",
+                          borderRadius: 6,
+                          border: "1px solid #555",
+                          background: "#111",
+                          color: "#fff",
+                          textAlign: "center",
+                        }}
+                      />
+                    </div>
                   ))}
-                </select>
-                <span>:</span>
-                <select
-                  value={tempLegs2 === "" ? "" : String(tempLegs2)}
-                  onChange={(e) => {
-                    const v = e.target.value === "" ? "" : Number(e.target.value);
-                    setTempLegs2(v as any);
-                  }}
-                  style={{
-                    padding: "0.3rem 0.5rem",
-                    borderRadius: 6,
-                    border: "1px solid #555",
-                    background: "#111",
-                    color: "#fff",
-                  }}
-                >
-                  <option value="">-</option>
-                  {legOptions.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-                <div style={{ flex: 1 }}>{editingMatch.player2}</div>
+                </div>
+                {placementError && (
+                  <div style={{ marginTop: 8, color: "#ff7961", fontSize: 13 }}>
+                    {placementError}
+                  </div>
+                )}
               </div>
-              <div style={{ marginTop: 8, fontSize: 12, color: "#bbb" }}>
-                Gültig sind nur Ergebnisse, bei denen einer der Spieler genau {targetLegs} Legs
-                erreicht und insgesamt höchstens {effectiveBestOf} Legs gespielt wurden
-                (kein Unentschieden).
+            ) : (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 8 }}>Ergebnis (Best of {effectiveBestOf}):</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, textAlign: "right" }}>{editingMatch.player1}</div>
+                  <select
+                    value={tempLegs1 === "" ? "" : String(tempLegs1)}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? "" : Number(e.target.value);
+                      setTempLegs1(v as any);
+                    }}
+                    style={{
+                      padding: "0.3rem 0.5rem",
+                      borderRadius: 6,
+                      border: "1px solid #555",
+                      background: "#111",
+                      color: "#fff",
+                    }}
+                  >
+                    <option value="">-</option>
+                    {legOptions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                  <span>:</span>
+                  <select
+                    value={tempLegs2 === "" ? "" : String(tempLegs2)}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? "" : Number(e.target.value);
+                      setTempLegs2(v as any);
+                    }}
+                    style={{
+                      padding: "0.3rem 0.5rem",
+                      borderRadius: 6,
+                      border: "1px solid #555",
+                      background: "#111",
+                      color: "#fff",
+                    }}
+                  >
+                    <option value="">-</option>
+                    {legOptions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ flex: 1 }}>{editingMatch.player2}</div>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, color: "#bbb" }}>
+                  Gültig sind nur Ergebnisse, bei denen einer der Spieler genau {targetLegs} Legs
+                  erreicht und insgesamt höchstens {effectiveBestOf} Legs gespielt wurden
+                  (kein Unentschieden).
+                </div>
               </div>
-            </div>
+            )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button
                 onClick={closeResultModal}
@@ -2012,16 +2389,23 @@ const exportTournament = () => {
                 Abbrechen
               </button>
               <button
-                disabled={!canConfirmResult}
-                onClick={confirmResult}
+                disabled={mode === "kratzer" ? !canConfirmKratzerResult : !canConfirmResult}
+                onClick={mode === "kratzer" ? confirmKratzerResult : confirmResult}
                 style={{
                   padding: "0.4rem 0.8rem",
                   borderRadius: 6,
                   border: "none",
-                  background: canConfirmResult ? "#4CAF50" : "#2e7d32",
-                  opacity: canConfirmResult ? 1 : 0.6,
+                  background:
+                    (mode === "kratzer" ? canConfirmKratzerResult : canConfirmResult)
+                      ? "#4CAF50"
+                      : "#2e7d32",
+                  opacity:
+                    (mode === "kratzer" ? canConfirmKratzerResult : canConfirmResult) ? 1 : 0.6,
                   color: "#fff",
-                  cursor: canConfirmResult ? "pointer" : "not-allowed",
+                  cursor:
+                    (mode === "kratzer" ? canConfirmKratzerResult : canConfirmResult)
+                      ? "pointer"
+                      : "not-allowed",
                 }}
               >
                 Ergebnis speichern
@@ -2036,6 +2420,8 @@ const exportTournament = () => {
         standings={
           mode === "league" || mode === "groups"
             ? calculateLeagueStandings()
+            : mode === "kratzer"
+            ? calculateKratzerStandings()
             : calculateStandings()
         }
         pointScheme={pointScheme}
