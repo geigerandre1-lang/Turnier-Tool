@@ -18,9 +18,9 @@ import { DebugPanel } from "./components/DebugPanel";
 import * as XLSX from 'xlsx';
 
 /** Spectator-Polling: seltener als bisher (3s), Pausieren bei Tab im Hintergrund. */
-const SPECTATOR_POLL_MS = 10000;
+const SPECTATOR_POLL_MS = 30000;
 /** Operator-Speichern: debounced, damit Automaten-/Match-Updates nicht jeden Tick POSTen. */
-const OPERATOR_SAVE_DEBOUNCE_MS = 1200;
+const OPERATOR_SAVE_DEBOUNCE_MS = 4000;
 
 const BACKEND_BASE =
   typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
@@ -290,29 +290,54 @@ export default function App() {
     });
   }, [matches, isStarted, waitTimerMinutes, timersEnabled]);
 
-  // Timer jede Sekunde ticken
+  // Timer ticken (pausiert im Hintergrund-Tab)
   useEffect(() => {
     if (!timersEnabled) return;
-    const interval = setInterval(() => {
-      setMatchTimers(prev => {
+    if (typeof document === "undefined") return;
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const tick = () => {
+      setMatchTimers((prev) => {
         const updated: Record<string, MatchTimerState> = { ...prev };
-        Object.keys(updated).forEach(id => {
+        let changed = false;
+        Object.keys(updated).forEach((id) => {
           const timer = updated[id];
           if (timer && timer.running && timer.secondsLeft > 0) {
             const next = timer.secondsLeft - 1;
-            // bei 0 stoppen, nicht neu starten
             updated[id] = {
               ...timer,
               secondsLeft: next,
               running: next > 0,
               startedAt: next > 0 ? timer.startedAt : undefined,
             };
+            changed = true;
           }
         });
-        return updated;
+        return changed ? updated : prev;
       });
-    }, 1000);
-    return () => clearInterval(interval);
+    };
+
+    const start = () => {
+      if (interval != null) return;
+      interval = setInterval(tick, 1000);
+    };
+    const stop = () => {
+      if (interval == null) return;
+      clearInterval(interval);
+      interval = null;
+    };
+    const onVis = () => {
+      if (document.hidden) stop();
+      else start();
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [timersEnabled]);
 
   useEffect(() => {

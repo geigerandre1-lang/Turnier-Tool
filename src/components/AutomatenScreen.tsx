@@ -18,7 +18,7 @@ interface AutomatenScreenProps {
   matchTimerMinutes?: number;
   setMatchTimerMinutes: React.Dispatch<React.SetStateAction<number>>;
   onOpenResultModal?: (matchId: string) => void;
-  mode?: "ko" | "league" | "groups";
+  mode?: "ko" | "league" | "groups" | "kratzer";
 }
 
 export function AutomatenScreen({
@@ -88,7 +88,38 @@ export function AutomatenScreen({
   const getPlayerName = (id: string | null) =>
     id ? players.find((p) => p.id === id)?.name || id : "-";
 
-  const isPlayableMatch = (m: MatchNode) => m.player1 && m.player2 && !m.winner;
+  const getMatchPlayers = (m: MatchNode): string[] => {
+    if (m.groupPlayers && m.groupPlayers.length > 0) return m.groupPlayers;
+    const list: string[] = [];
+    if (m.player1) list.push(m.player1);
+    if (m.player2) list.push(m.player2);
+    return list;
+  };
+
+  const formatMatchPlayers = (m: MatchNode) => {
+    const names = getMatchPlayers(m).map((n) => getPlayerName(n));
+    if (names.length === 0) return "-";
+    if (mode === "kratzer" || (m.groupPlayers && m.groupPlayers.length > 2)) {
+      return names.join(" · ");
+    }
+    return `${names[0] ?? "-"} vs. ${names[1] ?? "-"}`;
+  };
+
+  const isPlayableMatch = (m: MatchNode) => {
+    if (m.winner) return false;
+    if (m.groupPlayers && m.groupPlayers.length >= 2) return true;
+    return !!(m.player1 && m.player2);
+  };
+
+  const matchPlayersAvailable = (m: MatchNode, busyPlayers: Set<string>) => {
+    const names = getMatchPlayers(m);
+    if (names.length < 2) return false;
+    return names.every((p) => !busyPlayers.has(p));
+  };
+
+  const addBusyFromMatch = (m: MatchNode, busyPlayers: Set<string>) => {
+    getMatchPlayers(m).forEach((p) => busyPlayers.add(p));
+  };
 
   // Vorschau: Welche Matches würden als nächstes auf freie Automaten geladen?
   const computeNextAssignments = () => {
@@ -103,8 +134,7 @@ export function AutomatenScreen({
       if (!a.currentMatch) return;
       const m = matchesCopy[a.currentMatch];
       if (!m) return;
-      if (m.player1) busyPlayers.add(m.player1);
-      if (m.player2) busyPlayers.add(m.player2);
+      getMatchPlayers(m).forEach((p) => busyPlayers.add(p));
     });
 
     let pending = Object.values(matchesCopy).filter(
@@ -205,13 +235,7 @@ export function AutomatenScreen({
       const a = targets[i];
       if (!a) continue;
 
-      const idx = pending.findIndex((m) => {
-        const p1 = m.player1 ?? undefined;
-        const p2 = m.player2 ?? undefined;
-        if (!p1 || !p2) return false;
-        if (busyPlayers.has(p1) || busyPlayers.has(p2)) return false;
-        return true;
-      });
+      const idx = pending.findIndex((m) => matchPlayersAvailable(m, busyPlayers));
 
       if (idx === -1) break;
 
@@ -219,8 +243,7 @@ export function AutomatenScreen({
       pending.splice(idx, 1);
       preview[a.id] = m.id;
 
-      if (m.player1) busyPlayers.add(m.player1);
-      if (m.player2) busyPlayers.add(m.player2);
+      addBusyFromMatch(m, busyPlayers);
     }
 
     return preview;
@@ -230,9 +253,10 @@ export function AutomatenScreen({
   const nextMatchIds = new Set(Object.values(nextAssignments));
 
   // *************************
-  // automatische Verteilung
+  // automatische Verteilung (debounced, ohne automats-Dep → weniger Update-Loops)
   // *************************
   useEffect(() => {
+    const timer = setTimeout(() => {
     setAutomats((prevAutos) => {
       // wir klonen die Match‑Objekte nur bei Bedarf
       const matchesCopy: Record<string, MatchNode> = { ...matches };
@@ -248,14 +272,9 @@ export function AutomatenScreen({
 
         const match = matchesCopy[a.currentMatch];
 
-        // Automats freigeben, sobald das Match nicht mehr spielbar ist
-        if (
-          !match ||
-          !match.player1 ||
-          !match.player2 ||
-          !!match.winner ||
-          !match.isOnAutomat
-        ) {
+        // Automats freigeben, sobald das Match nicht mehr spielbar / abgeschlossen ist
+        const stillActive = !!match && isPlayableMatch(match) && !!match.isOnAutomat;
+        if (!stillActive) {
           if (match && match.isOnAutomat) {
             matchesCopy[a.currentMatch] = {
               ...match,
@@ -286,8 +305,7 @@ export function AutomatenScreen({
         if (!a.currentMatch) return;
         const m = matchesCopy[a.currentMatch];
         if (!m) return;
-        if (m.player1) busyPlayers.add(m.player1);
-        if (m.player2) busyPlayers.add(m.player2);
+        addBusyFromMatch(m, busyPlayers);
       });
 
       let pending = Object.values(matchesCopy).filter(
@@ -365,10 +383,7 @@ export function AutomatenScreen({
         // 1) Im Gruppenmodus zuerst nach einem Match derselben Gruppe suchen
         if (typeof preferredGroup === "number") {
           idx = pending.findIndex((m) => {
-            const p1 = m.player1 ?? undefined;
-            const p2 = m.player2 ?? undefined;
-            if (!p1 || !p2) return false;
-            if (busyPlayers.has(p1) || busyPlayers.has(p2)) return false;
+            if (!matchPlayersAvailable(m, busyPlayers)) return false;
             if (typeof m.group !== "number" || m.group !== preferredGroup) return false;
             return true;
           });
@@ -376,13 +391,7 @@ export function AutomatenScreen({
 
         // 2) Falls nichts Passendes in derselben Gruppe: globales Fallback wie bisher
         if (idx === -1) {
-          idx = pending.findIndex((m) => {
-            const p1 = m.player1 ?? undefined;
-            const p2 = m.player2 ?? undefined;
-            if (!p1 || !p2) return false;
-            if (busyPlayers.has(p1) || busyPlayers.has(p2)) return false;
-            return true;
-          });
+          idx = pending.findIndex((m) => matchPlayersAvailable(m, busyPlayers));
         }
 
         if (idx === -1) break;
@@ -407,8 +416,7 @@ export function AutomatenScreen({
         newlyAssignedMatchIds.push(m.id);
 
         // Spieler als "busy" markieren, damit sie nicht parallel noch ein Match bekommen
-        if (m.player1) busyPlayers.add(m.player1);
-        if (m.player2) busyPlayers.add(m.player2);
+        addBusyFromMatch(m, busyPlayers);
       }
 
       // queue‑Flags aktualisieren
@@ -501,7 +509,9 @@ export function AutomatenScreen({
       }
       return automatChanged ? updatedAutos : prevAutos;
     });
-  }, [matches, automats, mode]);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [matches, mode]);
 
   const toggleActive = (id: number) =>
     setAutomats((prev) =>
@@ -557,12 +567,12 @@ export function AutomatenScreen({
   // Match-Rahmenfarbe bestimmen
   // ----------------------------
   const getMatchBorderColor = (match?: MatchNode) => {
-    if (!match || !match.player1 || !match.player2) return "#555";       // Grau: nicht spielbar
+    if (!match) return "#555";
     if (match.winner) return "#4CAF50";                                  // Grün: abgeschlossen
+    if (!isPlayableMatch(match)) return "#555";                         // Grau: nicht spielbar
     if (match.isOnAutomat) return "#2196F3";                             // Blau: aktuell auf Automat
     if (match.isNextInAutomatQueue || nextMatchIds.has(match.id)) return "#FFEB3B"; // Gelb: explizit next in Queue oder per Vorschau als nächstes
-    if (match.player1 && match.player2) return "#FFA726";                // Orange: spielbar, wartet
-    return "#555";                                                        // Standard dunkel
+    return "#FFA726";                                                   // Orange: spielbar, wartet
   };
 
   const baseButtonStyle: CSSProperties = {
@@ -707,7 +717,7 @@ export function AutomatenScreen({
                     <div style={{ marginTop: 8 }}>
                       <div>Match: {match.id}</div>
                       <div style={{ marginTop: 4, fontSize: 14 }}>
-                        {getPlayerName(match.player1)} vs. {getPlayerName(match.player2)}
+                        {formatMatchPlayers(match)}
                       </div>
                       {timersEnabled && (
                         <>
@@ -805,7 +815,7 @@ export function AutomatenScreen({
                       <div style={{ fontWeight: 'bold', marginBottom: 2 }}>Als nächstes:</div>
                       <div>Match: {previewMatch.id}</div>
                       <div>
-                        {getPlayerName(previewMatch.player1)} vs. {getPlayerName(previewMatch.player2)}
+                        {formatMatchPlayers(previewMatch)}
                         {typeof previewMatch.group === 'number'
                           ? ` (Gruppe ${previewMatch.group + 1})`
                           : ''}
@@ -847,7 +857,7 @@ export function AutomatenScreen({
                     status = "Next";
                   } else if (nextAutomatId !== undefined) {
                     status = `Geplant für Automat ${nextAutomatId}`;
-                  } else if (m.player1 && m.player2) {
+                  } else if (isPlayableMatch(m)) {
                     status = "Wartet";
                   } else {
                     status = "Nicht spielbar";
@@ -886,7 +896,7 @@ export function AutomatenScreen({
                     >
                       <div style={{ fontWeight: "bold", marginBottom: 4 }}>{m.id}</div>
                       <div style={{ fontSize: 13, marginBottom: 4 }}>
-                        {getPlayerName(m.player1)} vs. {getPlayerName(m.player2)}
+                        {formatMatchPlayers(m)}
                       </div>
                       <div style={{ color: statusColor }}>{status}</div>
                     </div>
