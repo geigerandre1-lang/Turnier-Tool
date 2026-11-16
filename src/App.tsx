@@ -199,6 +199,12 @@ export default function App() {
   });
   const [loginInput, setLoginInput] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState(
+    "Wartungsarbeiten – bitte später erneut versuchen."
+  );
+  const [maintenanceLoaded, setMaintenanceLoaded] = useState(false);
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
 
   // Timer-State für alle Matches
   const [matchTimers, setMatchTimers] = useState<Record<string, MatchTimerState>>({});
@@ -601,7 +607,9 @@ export default function App() {
       setSlotsLoading(true);
       setSlotsError(null);
       try {
-        const res = await fetch(`${BACKEND_BASE}/tournaments`);
+        const headers: Record<string, string> = {};
+        if (authToken) headers.Authorization = `Bearer ${authToken}`;
+        const res = await fetch(`${BACKEND_BASE}/tournaments`, { headers });
         if (!res.ok) {
           setSlotsError("Konnte Turnierliste nicht laden");
           return;
@@ -617,7 +625,7 @@ export default function App() {
     };
 
     loadSlots();
-  }, []);
+  }, [authToken]);
 
   // Abgeleitete Daten für Spieler-Ansicht und Benachrichtigungen
   const playerViewSelectedPlayer = useMemo(
@@ -1196,14 +1204,43 @@ const exportTournament = () => {
     });
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadMaintenance = async () => {
+      try {
+        const res = await fetch(`${BACKEND_BASE}/maintenance`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setMaintenanceEnabled(!!data.enabled);
+        if (typeof data.message === "string" && data.message.trim()) {
+          setMaintenanceMessage(data.message);
+        }
+      } catch (e) {
+        console.warn("Konnte Wartungsstatus nicht laden", e);
+      } finally {
+        if (!cancelled) setMaintenanceLoaded(true);
+      }
+    };
+    loadMaintenance();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleLogin = async () => {
     setLoginError(null);
 
     try {
+      const body: { password: string; tournamentId?: string | null } = {
+        password: loginInput,
+      };
+      if (tournamentId) body.tournamentId = tournamentId;
+
       const res = await fetch(`${BACKEND_BASE}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: loginInput, tournamentId }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -1233,6 +1270,79 @@ const exportTournament = () => {
     setLoginError(null);
   };
 
+  const handleToggleMaintenance = async () => {
+    if (!authToken || maintenanceBusy) return;
+    setMaintenanceBusy(true);
+    try {
+      const res = await fetch(`${BACKEND_BASE}/maintenance`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          enabled: !maintenanceEnabled,
+          message: maintenanceMessage,
+        }),
+      });
+      if (!res.ok) {
+        setLoginError("Wartungsmodus konnte nicht geändert werden");
+        return;
+      }
+      const data = await res.json();
+      setMaintenanceEnabled(!!data.enabled);
+      if (typeof data.message === "string" && data.message.trim()) {
+        setMaintenanceMessage(data.message);
+      }
+    } catch (e) {
+      console.warn("Wartungsmodus-Toggle fehlgeschlagen", e);
+      setLoginError("Wartungsmodus konnte nicht geändert werden");
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  };
+
+  const renderMaintenanceScreen = () => (
+    <div
+      style={{
+        maxWidth: 560,
+        margin: "4rem auto",
+        padding: "1.5rem",
+        borderRadius: 12,
+        background: "#111",
+        color: "#eee",
+        boxShadow: "0 0 20px rgba(0,0,0,0.4)",
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      }}
+    >
+      <h2 style={{ marginTop: 0 }}>Wartungsmodus</h2>
+      <p style={{ opacity: 0.85, lineHeight: 1.45 }}>{maintenanceMessage}</p>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        Die Seite ist vorübergehend offline. Turnierleitung kann sich anmelden, um den
+        Wartungsmodus zu beenden.
+      </p>
+      {renderAuthBar()}
+      {isOperator && (
+        <button
+          onClick={handleToggleMaintenance}
+          disabled={maintenanceBusy}
+          style={{
+            marginTop: 8,
+            padding: "0.55rem 1rem",
+            borderRadius: 8,
+            border: "none",
+            background: "#FF9800",
+            color: "#111",
+            fontWeight: 700,
+            cursor: maintenanceBusy ? "not-allowed" : "pointer",
+          }}
+        >
+          {maintenanceBusy ? "Bitte warten…" : "Wartungsmodus beenden"}
+        </button>
+      )}
+    </div>
+  );
+
   const renderAuthBar = () => (
     <div
       style={{
@@ -1248,7 +1358,9 @@ const exportTournament = () => {
     >
       {isOperator ? (
         <>
-          <span style={{ fontWeight: 600 }}>Operator-Modus aktiv</span>
+          <span style={{ fontWeight: 600 }}>
+            {TOURNAMENT_ID ? "Operator-Modus aktiv" : "Admin-Login aktiv"}
+          </span>
           <button
             onClick={handleLogout}
             style={{
@@ -1310,9 +1422,11 @@ const exportTournament = () => {
     }
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
       const res = await fetch(`${BACKEND_BASE}/tournaments`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           name: newTournamentName.trim(),
           operatorPassword: newOperatorPassword.trim(),
@@ -1327,7 +1441,9 @@ const exportTournament = () => {
       setNewOperatorPassword("");
 
       // Liste aktualisieren
-      const listRes = await fetch(`${BACKEND_BASE}/tournaments`);
+      const listHeaders: Record<string, string> = {};
+      if (authToken) listHeaders.Authorization = `Bearer ${authToken}`;
+      const listRes = await fetch(`${BACKEND_BASE}/tournaments`, { headers: listHeaders });
       if (listRes.ok) {
         const data = await listRes.json();
         setTournamentSlots(data?.slots ?? []);
@@ -1399,6 +1515,51 @@ const exportTournament = () => {
           fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         }}
       >
+        {renderAuthBar()}
+        {isOperator && (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: "0.75rem 1rem",
+              borderRadius: 8,
+              border: `1px solid ${maintenanceEnabled ? "#FF9800" : "#333"}`,
+              background: maintenanceEnabled ? "#3a2a10" : "#181818",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ flex: 1, fontSize: 14 }}>
+              <div style={{ fontWeight: 700 }}>
+                Wartungsmodus: {maintenanceEnabled ? "AN" : "AUS"}
+              </div>
+              <div style={{ opacity: 0.75, fontSize: 12 }}>
+                Site temporär für Zuschauer offline nehmen (Login erforderlich).
+              </div>
+            </div>
+            <button
+              onClick={handleToggleMaintenance}
+              disabled={maintenanceBusy}
+              style={{
+                padding: "0.45rem 0.9rem",
+                borderRadius: 999,
+                border: "none",
+                background: maintenanceEnabled ? "#4CAF50" : "#FF9800",
+                color: maintenanceEnabled ? "#fff" : "#111",
+                fontWeight: 700,
+                cursor: maintenanceBusy ? "not-allowed" : "pointer",
+                fontSize: 13,
+              }}
+            >
+              {maintenanceBusy
+                ? "Bitte warten…"
+                : maintenanceEnabled
+                ? "Wartungsmodus beenden"
+                : "Wartungsmodus aktivieren"}
+            </button>
+          </div>
+        )}
         <h2 style={{ marginTop: 0 }}>Turnier auswählen</h2>
         <p style={{ fontSize: 14, opacity: 0.8 }}>
           Wähle ein bestehendes Turnier oder lege ein neues an. Zum Löschen genügt das
@@ -1523,6 +1684,11 @@ const exportTournament = () => {
       </div>
     );
   };
+
+  // Site-weiter Wartungsmodus: für Gäste blockieren, Staff kann weiter / beenden
+  if (maintenanceLoaded && maintenanceEnabled && !isOperator) {
+    return renderMaintenanceScreen();
+  }
 
   // Pre-Start: nur Turnierleitung sieht Settings, alle anderen direkt Zuschaueransicht
   if (!TOURNAMENT_ID) {
